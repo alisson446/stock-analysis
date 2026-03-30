@@ -67,6 +67,7 @@ def fetch_fundamentals(tickers_sa: list[str], delay: float = 0.5) -> pd.DataFram
             industry = _safe_get(info, 'industry', '')
             company_name = _safe_get(info, 'shortName', ticker_sa)
             dividend_yield = _safe_get(info, 'dividendYield')
+            dividend_rate = _safe_get(info, 'dividendRate')  # DPS anual em R$
             total_debt = _safe_get(info, 'totalDebt')
             total_cash = _safe_get(info, 'totalCash')
 
@@ -191,6 +192,7 @@ def fetch_fundamentals(tickers_sa: list[str], delay: float = 0.5) -> pd.DataFram
                 'ebit': ebit,
                 'fcf_latest': fcf_latest,
                 'shares_outstanding': shares_outstanding,
+                'dividend_rate': dividend_rate,
             })
 
         except Exception as e:
@@ -206,6 +208,7 @@ def fetch_fundamentals(tickers_sa: list[str], delay: float = 0.5) -> pd.DataFram
                     'dl_ebit', 'dl_pl', 'roe_pct', 'liquidez_corrente', 'passivos_ativos',
                     'liq_media_diaria', 'lpa', 'vpa', 'dy_pct', 'divida_liquida',
                     'ebit', 'fcf_latest', 'shares_outstanding',
+                    'dividend_rate',
                 ]}
             })
 
