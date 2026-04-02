@@ -2,7 +2,11 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import time
+from pathlib import Path
 from tqdm import tqdm
+
+DATA_DIR = Path(__file__).resolve().parent.parent / 'data'
+FUNDAMENTALS_CACHE = DATA_DIR / 'fundamentals.csv'
 
 
 def _safe_get(info: dict, key: str, default=np.nan):
@@ -35,17 +39,31 @@ def _extract_financial_series(df_fin, labels):
     return pd.Series(dtype=float)
 
 
-def fetch_fundamentals(tickers_sa: list[str], delay: float = 0.5) -> pd.DataFrame:
+def fetch_fundamentals(tickers_sa: list[str], delay: float = 0.5,
+                       force_refresh: bool = False) -> pd.DataFrame:
     """
     Coleta dados fundamentalistas de cada ticker via yfinance.
+    Usa cache local (data/fundamentals.csv) se existir.
+    Se não existir ou force_refresh=True, busca via API e salva o resultado.
 
     Args:
         tickers_sa: Lista de tickers com sufixo .SA (ex: ['PETR4.SA', 'VALE3.SA'])
         delay: Tempo de espera entre requisições (segundos)
+        force_refresh: Se True, ignora cache e busca dados novos
 
     Returns:
         DataFrame com todas as métricas calculadas
     """
+    if not force_refresh and FUNDAMENTALS_CACHE.exists():
+        df = pd.read_csv(FUNDAMENTALS_CACHE)
+        print(f"[fundamentals] {len(df)} tickers carregados do cache ({FUNDAMENTALS_CACHE})")
+        return df
+
+    return _fetch_fundamentals_from_api(tickers_sa, delay)
+
+
+def _fetch_fundamentals_from_api(tickers_sa: list[str], delay: float) -> pd.DataFrame:
+    """Busca dados fundamentalistas via yfinance e salva em cache."""
     records = []
 
     for ticker_sa in tqdm(tickers_sa, desc="Coletando fundamentals"):
@@ -215,8 +233,13 @@ def fetch_fundamentals(tickers_sa: list[str], delay: float = 0.5) -> pd.DataFram
         time.sleep(delay)
 
     df = pd.DataFrame(records)
+
+    # Salvar cache
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    df.to_csv(FUNDAMENTALS_CACHE, index=False)
+
     print(f"\n[fundamentals] {len(df)} tickers processados, "
-          f"{df['preco'].notna().sum()} com dados de preço")
+          f"{df['preco'].notna().sum()} com dados de preço (salvo em {FUNDAMENTALS_CACHE})")
     return df
 
 

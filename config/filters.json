@@ -1,0 +1,28 @@
+{
+  "stock_filters": {
+    "pl_min": 0,
+    "pl_max": 10,
+    "pvp_min": 0,
+    "pvp_max": 1.5,
+    "margem_ebit_pct_min": 0,
+    "margem_liquida_pct_min": 10,
+    "dl_ebit_max": 3,
+    "dl_pl_max": 2,
+    "roe_pct_min": 10,
+    "liquidez_corrente_min": 1,
+    "passivos_ativos_max": 1,
+    "liq_media_diaria_min": 100000,
+    "lpa_min": 0
+  },
+  "bank_filters": {
+    "pl_min": 0,
+    "pl_max": 10,
+    "pvp_min": 0,
+    "pvp_max": 2.0,
+    "roe_pct_min": 15,
+    "margem_liquida_pct_min": 10,
+    "lpa_min": 0,
+    "liq_media_diaria_min": 100000,
+    "dy_pct_min": 3
+  }
+}

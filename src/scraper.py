@@ -3,6 +3,10 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import yfinance as yf
 import time
+from pathlib import Path
+
+DATA_DIR = Path(__file__).resolve().parent.parent / 'data'
+TICKERS_CACHE = DATA_DIR / 'tickers.csv'
 
 # Tickers bancários conhecidos (fallback para classificação)
 KNOWN_BANK_TICKERS = {
@@ -22,8 +26,21 @@ BANK_INDUSTRIES = {
 }
 
 
-def get_tickers() -> pd.DataFrame:
-    """Scrape stock tickers from dadosdemercado.com.br/acoes."""
+def get_tickers(force_refresh: bool = False) -> pd.DataFrame:
+    """
+    Retorna DataFrame de tickers. Usa cache local (data/tickers.csv) se existir.
+    Se não existir ou force_refresh=True, faz scraping e salva o resultado.
+    """
+    if not force_refresh and TICKERS_CACHE.exists():
+        df = pd.read_csv(TICKERS_CACHE)
+        print(f"[scraper] {len(df)} tickers carregados do cache ({TICKERS_CACHE})")
+        return df
+
+    return _scrape_tickers()
+
+
+def _scrape_tickers() -> pd.DataFrame:
+    """Scrape stock tickers from dadosdemercado.com.br/acoes e salva em cache."""
     url = 'https://www.dadosdemercado.com.br/acoes'
     headers = {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
@@ -61,7 +78,11 @@ def get_tickers() -> pd.DataFrame:
         'ticker_sa': [f'{t}.SA' for t in unique_tickers],
     })
 
-    print(f"[scraper] {len(df)} tickers obtidos de dadosdemercado.com.br")
+    # Salvar cache
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    df.to_csv(TICKERS_CACHE, index=False)
+
+    print(f"[scraper] {len(df)} tickers obtidos de dadosdemercado.com.br (salvo em {TICKERS_CACHE})")
     return df
 
 
