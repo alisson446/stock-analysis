@@ -50,7 +50,8 @@ def _compute_fcf_cagr(fcf_series: pd.Series) -> float:
     return max(MIN_GROWTH_RATE, min(MAX_GROWTH_RATE, cagr))
 
 
-def dcf_valuation(ticker_sa: str, shares_outstanding: float = None) -> dict:
+def dcf_valuation(ticker_sa: str, shares_outstanding: float = None,
+                  net_debt: float = None) -> dict:
     """
     Calcula preço justo via DCF de 2 estágios (inspirado Simply Wall St).
 
@@ -58,9 +59,14 @@ def dcf_valuation(ticker_sa: str, shares_outstanding: float = None) -> dict:
     até TERMINAL_GROWTH ao longo de PROJECTION_YEARS anos.
     Estágio 2 (estável): valor terminal via Gordon Growth Model com TERMINAL_GROWTH.
 
+    A série de FCF do yfinance é desalavancada (FCFF = OCF - CapEx), portanto
+    seu valor presente é o Enterprise Value. Convertemos para Equity Value
+    subtraindo a dívida líquida antes de dividir pelo número de ações.
+
     Args:
         ticker_sa: Ticker com sufixo .SA
         shares_outstanding: Número de ações. Se None, busca do yfinance.
+        net_debt: Dívida líquida (Total Debt - Cash). Se None, busca do yfinance.
 
     Returns:
         dict com 'preco_justo_dcf', 'growth_rate', 'fcf_base'
@@ -81,12 +87,25 @@ def dcf_valuation(ticker_sa: str, shares_outstanding: float = None) -> dict:
         if pd.isna(fcf_base) or fcf_base <= 0:
             return result
 
-        # Obter shares_outstanding se não fornecido
-        if shares_outstanding is None or pd.isna(shares_outstanding):
+        # Obter shares_outstanding e/ou net_debt do yfinance se não fornecidos
+        if (shares_outstanding is None or pd.isna(shares_outstanding)
+                or net_debt is None or pd.isna(net_debt)):
             info = yf.Ticker(ticker_sa).info
-            shares_outstanding = info.get('sharesOutstanding')
-            if shares_outstanding is None or shares_outstanding <= 0:
-                return result
+            if shares_outstanding is None or pd.isna(shares_outstanding):
+                shares_outstanding = info.get('sharesOutstanding')
+            if net_debt is None or pd.isna(net_debt):
+                total_debt = info.get('totalDebt')
+                total_cash = info.get('totalCash')
+                if total_debt is not None and total_cash is not None:
+                    net_debt = total_debt - total_cash
+
+        if shares_outstanding is None or shares_outstanding <= 0:
+            return result
+
+        # Se a dívida líquida não estiver disponível, assume 0 (sem ajuste),
+        # degradando ao comportamento anterior em vez de abortar o valuation.
+        if net_debt is None or pd.isna(net_debt):
+            net_debt = 0.0
 
         # Taxa de crescimento histórica (initial rate)
         initial_growth = _compute_fcf_cagr(fcf_series)
@@ -116,11 +135,14 @@ def dcf_valuation(ticker_sa: str, shares_outstanding: float = None) -> dict:
         )
         pv_terminal = terminal_value / (1 + SELIC) ** PROJECTION_YEARS
 
-        # Valor total da empresa
+        # Enterprise Value (FCF do yfinance é desalavancado)
         enterprise_value = pv_fcfs + pv_terminal
 
+        # Equity Value = Enterprise Value - Dívida Líquida
+        equity_value = enterprise_value - net_debt
+
         # Preço justo por ação
-        fair_price = enterprise_value / shares_outstanding
+        fair_price = equity_value / shares_outstanding
 
         result['preco_justo_dcf'] = fair_price if fair_price > 0 else np.nan
         result['growth_rate'] = initial_growth
@@ -281,7 +303,11 @@ def apply_valuation(df: pd.DataFrame, all_fundamentals: pd.DataFrame,
             primary_price = excess_returns_valuation(roe_decimal, vpa)
         else:
             # DCF 2-estágios para ações
-            dcf_result = dcf_valuation(row['ticker_sa'], row.get('shares_outstanding'))
+            dcf_result = dcf_valuation(
+                row['ticker_sa'],
+                row.get('shares_outstanding'),
+                row.get('divida_liquida'),
+            )
             primary_price = dcf_result['preco_justo_dcf']
 
             # Fallback DDM se DCF retornar NaN
