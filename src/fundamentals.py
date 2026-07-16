@@ -318,3 +318,58 @@ def get_fcf_series(ticker_sa: str) -> pd.Series:
         return _extract_financial_series(cf, ['Free Cash Flow', 'FreeCashFlow'])
     except Exception:
         return pd.Series(dtype=float)
+
+
+# Horizontes de crescimento aceitos, do mais longo ao mais curto. O yfinance
+# 1.2 rotula o longo prazo como 'LTG'; versões antigas usam '+5y'. Quando o
+# horizonte longo não tem estimativa para a ação (comum em BR), caímos no
+# próximo ano ('+1y') e depois no ano corrente ('0y').
+_FORWARD_GROWTH_PERIODS = ('LTG', '+5y', '5y', '+1y', '0y')
+# Colunas que trazem a estimativa DA AÇÃO. Nunca usamos 'indexTrend' (é o
+# crescimento do índice, não da empresa).
+_FORWARD_GROWTH_STOCK_COLS = ('stockTrend', 'stock', 'growth')
+
+
+def get_forward_growth(ticker_sa: str) -> float:
+    """
+    Crescimento estimado por analistas para a ação, via yfinance.
+
+    Alimenta o crescimento inicial (estágio 1) do DCF quando as estimativas
+    forward estão ligadas. A SWS usa consenso de analistas no primeiro estágio;
+    esta é a fonte gratuita mais próxima disso. Prefere o horizonte mais longo
+    disponível ('LTG'/'+5y'), caindo para o próximo ano ('+1y') quando o longo
+    prazo não tem dado para a ação.
+
+    A cobertura para ações BR é irregular e o layout de `growth_estimates` varia
+    entre versões do yfinance, então a função é defensiva: retorna NaN em
+    qualquer falha e o DCF cai de volta no CAGR histórico.
+
+    Returns:
+        Crescimento anual como decimal (ex.: 0.12 para 12%) ou NaN.
+    """
+    try:
+        est = yf.Ticker(ticker_sa).growth_estimates
+    except Exception:
+        return np.nan
+
+    if est is None or getattr(est, 'empty', True):
+        return np.nan
+
+    stock_col = next(
+        (c for c in _FORWARD_GROWTH_STOCK_COLS if c in est.columns), None
+    )
+    if stock_col is None:
+        return np.nan
+
+    for period in _FORWARD_GROWTH_PERIODS:
+        if period not in est.index:
+            continue
+        value = est.loc[period, stock_col]
+        if pd.notna(value):
+            value = float(value)
+            # Alguns feeds retornam em pontos percentuais (ex.: 12.0 = 12%).
+            if abs(value) > 1:
+                value = value / 100.0
+            return value
+
+    return np.nan

@@ -269,6 +269,177 @@ class TestDdmValuation:
         assert np.isnan(v.ddm_valuation(0.0))
 
 
+class TestEnvHelpers:
+    """RF/ERP e a flag forward passam a ser editáveis via env."""
+
+    def test_env_float_reads_value(self, monkeypatch):
+        monkeypatch.setenv('X_RF', '0.2')
+        assert v._env_float('X_RF', 0.1) == 0.2
+
+    def test_env_float_default_when_missing(self, monkeypatch):
+        monkeypatch.delenv('X_RF', raising=False)
+        assert v._env_float('X_RF', 0.1) == 0.1
+
+    def test_env_float_default_on_invalid(self, monkeypatch):
+        monkeypatch.setenv('X_RF', 'abc')
+        assert v._env_float('X_RF', 0.1) == 0.1
+
+    def test_env_bool_accepts_truthy_words(self, monkeypatch):
+        for val in ('1', 'true', 'YES', 'on'):
+            monkeypatch.setenv('X_B', val)
+            assert v._env_bool('X_B') is True
+
+    def test_env_bool_false_and_default(self, monkeypatch):
+        monkeypatch.setenv('X_B', '0')
+        assert v._env_bool('X_B') is False
+        monkeypatch.delenv('X_B', raising=False)
+        assert v._env_bool('X_B', default=False) is False
+
+
+class TestForwardGrowth:
+    """
+    Com USE_FORWARD_ESTIMATES ligado, o estágio 1 usa o crescimento de analistas
+    (yfinance); senão, o CAGR histórico. Sem estimativa forward, cai de volta no
+    histórico. get_fcf_series/get_forward_growth são mockados para não bater rede.
+    """
+
+    FCF = pd.Series([121e6, 110e6, 100e6])  # CAGR histórico = 10%
+
+    def test_uses_forward_growth_when_enabled(self, monkeypatch):
+        monkeypatch.setattr(v, 'get_fcf_series', lambda t: self.FCF)
+        monkeypatch.setattr(v, 'get_forward_growth', lambda t: 0.05)
+        monkeypatch.setattr(v, 'USE_FORWARD_ESTIMATES', True)
+        res = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0)
+        assert res['growth_source'] == 'forward'
+        assert res['growth_rate'] == pytest.approx(0.05)
+
+    def test_ignores_forward_when_disabled(self, monkeypatch):
+        monkeypatch.setattr(v, 'get_fcf_series', lambda t: self.FCF)
+        monkeypatch.setattr(v, 'get_forward_growth', lambda t: 0.05)
+        monkeypatch.setattr(v, 'USE_FORWARD_ESTIMATES', False)
+        res = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0)
+        assert res['growth_source'] == 'historical'
+        assert res['growth_rate'] == pytest.approx(0.10, abs=1e-6)
+
+    def test_falls_back_to_historical_when_forward_nan(self, monkeypatch):
+        monkeypatch.setattr(v, 'get_fcf_series', lambda t: self.FCF)
+        monkeypatch.setattr(v, 'get_forward_growth', lambda t: float('nan'))
+        monkeypatch.setattr(v, 'USE_FORWARD_ESTIMATES', True)
+        res = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0)
+        assert res['growth_source'] == 'historical'
+        assert res['growth_rate'] == pytest.approx(0.10, abs=1e-6)
+
+    def test_forward_growth_is_capped_at_max(self, monkeypatch):
+        monkeypatch.setattr(v, 'get_fcf_series', lambda t: self.FCF)
+        monkeypatch.setattr(v, 'get_forward_growth', lambda t: 0.90)
+        monkeypatch.setattr(v, 'USE_FORWARD_ESTIMATES', True)
+        res = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0)
+        assert res['growth_rate'] == v.MAX_GROWTH_RATE
+
+
+class TestMetodoValuation:
+    """
+    A coluna metodo_valuation desfaz a ambiguidade do 'preco_justo_dcf': em
+    incorporadoras com FCF negativo o valor vinha do DDM, não do DCF.
+    """
+
+    @staticmethod
+    def _fundamentals(setor):
+        # >=2 linhas por setor para as médias de Graham; beta_raw p/ o setor.
+        return pd.DataFrame({
+            'ticker': ['A', 'B'],
+            'setor': [setor, setor],
+            'pl': [8.0, 9.0],
+            'pvp': [1.0, 1.1],
+            'beta_raw': [1.0, 1.0],
+        })
+
+    def test_bank_is_labeled_excess_returns(self):
+        df = pd.DataFrame({
+            'ticker': ['BANK1'], 'ticker_sa': ['BANK1.SA'], 'setor': ['Banks'],
+            'roe_pct': [25.0], 'vpa': [10.0], 'lpa': [2.0], 'preco': [5.0],
+            'dividend_rate': [1.0], 'shares_total': [1e6],
+        })
+        out = v.apply_valuation(df, self._fundamentals('Banks'), model='bank')
+        assert out.loc[0, 'metodo_valuation'] == 'excess_returns'
+
+    def test_bank_is_none_when_excess_returns_undefined(self):
+        # ROE < CoE -> excess returns NaN e sem fallback p/ banco.
+        df = pd.DataFrame({
+            'ticker': ['BANK1'], 'ticker_sa': ['BANK1.SA'], 'setor': ['Banks'],
+            'roe_pct': [5.0], 'vpa': [10.0], 'lpa': [2.0], 'preco': [5.0],
+            'dividend_rate': [1.0], 'shares_total': [1e6],
+        })
+        out = v.apply_valuation(df, self._fundamentals('Banks'), model='bank')
+        assert out.loc[0, 'metodo_valuation'] == 'none'
+
+    def test_stock_with_valid_dcf_is_labeled_dcf(self, monkeypatch):
+        monkeypatch.setattr(v, 'dcf_valuation', lambda *a, **k: {
+            'preco_justo_dcf': 20.0, 'growth_rate': 0.1, 'fcf_base': 1.0,
+            'cost_of_equity': 0.18, 'growth_source': 'historical',
+        })
+        df = pd.DataFrame({
+            'ticker': ['X'], 'ticker_sa': ['X.SA'], 'setor': ['Retail'],
+            'lpa': [2.0], 'vpa': [10.0], 'preco': [5.0],
+            'dividend_rate': [1.0], 'shares_total': [1e6],
+        })
+        out = v.apply_valuation(df, self._fundamentals('Retail'), model='stock')
+        assert out.loc[0, 'metodo_valuation'] == 'dcf'
+        assert out.loc[0, 'growth_source'] == 'historical'
+
+    def test_stock_falls_back_to_ddm_when_dcf_nan(self, monkeypatch):
+        monkeypatch.setattr(v, 'dcf_valuation', lambda *a, **k: {
+            'preco_justo_dcf': np.nan, 'growth_rate': np.nan, 'fcf_base': np.nan,
+            'cost_of_equity': np.nan, 'growth_source': 'historical',
+        })
+        df = pd.DataFrame({
+            'ticker': ['INCORP'], 'ticker_sa': ['INCORP.SA'], 'setor': ['Retail'],
+            'lpa': [2.0], 'vpa': [10.0], 'preco': [5.0],
+            'dividend_rate': [1.0], 'shares_total': [1e6],
+        })
+        out = v.apply_valuation(df, self._fundamentals('Retail'), model='stock')
+        assert out.loc[0, 'metodo_valuation'] == 'ddm'
+
+
+class TestAppendSnapshot:
+    """Histórico append-only com preço justo, método e as premissas da rodada."""
+
+    @staticmethod
+    def _valued():
+        return pd.DataFrame({
+            'tipo': ['ação'], 'ticker': ['X'], 'nome': ['X SA'], 'setor': ['Retail'],
+            'preco': [5.0], 'preco_justo_dcf': [10.0], 'metodo_valuation': ['dcf'],
+            'growth_source': ['historical'], 'preco_justo_graham': [8.0],
+            'margem_seg_dcf_pct': [50.0], 'margem_seg_graham_pct': [37.5],
+            'margem_seg_media_pct': [43.75], 'undervalued': [True],
+            'forte_desconto': [True], 'cost_of_equity_pct': [18.0],
+        })
+
+    def test_writes_header_row_and_assumptions(self, tmp_path):
+        p = tmp_path / 'hist.csv'
+        v.append_snapshot(self._valued(), path=p, snapshot_date='2026-07-16')
+        out = pd.read_csv(p)
+        assert len(out) == 1
+        assert out.loc[0, 'data_snapshot'] == '2026-07-16'
+        assert out.loc[0, 'metodo_valuation'] == 'dcf'
+        for col in ('risk_free_rate', 'equity_risk_premium',
+                    'terminal_growth', 'use_forward_estimates'):
+            assert col in out.columns
+
+    def test_appends_without_duplicating_header(self, tmp_path):
+        p = tmp_path / 'hist.csv'
+        v.append_snapshot(self._valued(), path=p, snapshot_date='2026-07-16')
+        v.append_snapshot(self._valued(), path=p, snapshot_date='2026-07-17')
+        out = pd.read_csv(p)
+        assert len(out) == 2
+        assert set(out['data_snapshot']) == {'2026-07-16', '2026-07-17'}
+
+    def test_empty_df_is_a_noop(self, tmp_path):
+        p = tmp_path / 'hist.csv'
+        v.append_snapshot(pd.DataFrame(), path=p)
+        assert not p.exists()
+
+
 class TestRsul4Regression:
     """
     Regressão do caso que originou a correção: com os dados reais da RSUL4 o

@@ -1,13 +1,50 @@
+import os
+from pathlib import Path
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from src.fundamentals import get_fcf_series, resolve_share_count
+from src.fundamentals import get_fcf_series, resolve_share_count, get_forward_growth
+
+# Carrega variáveis de um .env se python-dotenv estiver instalado. O .env é
+# gitignored e guarda os dados que mudam com o tempo e que o yfinance NÃO
+# fornece (macro), para você editar manualmente sem tocar no código.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+
+def _env_float(name: str, default: float) -> float:
+    """Lê um float da env; usa o default se ausente/vazio/inválido."""
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == '':
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        print(f"[valuation] {name}={raw!r} inválido, usando default {default}")
+        return default
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    """Lê um booleano da env ('1', 'true', 'yes', 'on' -> True)."""
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == '':
+        return default
+    return raw.strip().lower() in ('1', 'true', 'yes', 'on')
+
 
 # Parâmetros de valuation
 # Todas as taxas são NOMINAIS (em R$ corrente), coerentes entre si.
-RISK_FREE_RATE = 0.124     # Média 5 anos do título longo do governo BR (fonte SWS)
-EQUITY_RISK_PREMIUM = 0.075  # Prêmio de risco de mercado BR (S&P Global, via SWS)
+# RF e ERP são macro: mudam com o cenário e são editáveis via env (o yfinance
+# não fornece esses dados).
+RISK_FREE_RATE = _env_float('RISK_FREE_RATE', 0.124)     # Título longo do governo BR (média 5a, fonte SWS)
+EQUITY_RISK_PREMIUM = _env_float('EQUITY_RISK_PREMIUM', 0.075)  # Prêmio de risco BR (S&P Global, via SWS)
 TERMINAL_GROWTH = RISK_FREE_RATE  # Perpetuidade não pode exceder a economia
+# Liga o uso de estimativas forward de crescimento (analistas via yfinance) no
+# estágio 1 do DCF. Desligado por padrão -> comportamento = CAGR histórico.
+USE_FORWARD_ESTIMATES = _env_bool('USE_FORWARD_ESTIMATES', False)
 PROJECTION_YEARS = 10      # Horizonte de projeção (2 estágios: decay linear)
 MAX_GROWTH_RATE = 0.20     # Cap de crescimento anual
 MIN_GROWTH_RATE = 0.0      # Floor de crescimento
@@ -165,13 +202,17 @@ def discount_fcf_to_equity(fcf_base: float, growth: float, discount_rate: float,
 
 
 def dcf_valuation(ticker_sa: str, shares_total: float = None,
-                  beta: float = None) -> dict:
+                  beta: float = None, forward_growth: float = None) -> dict:
     """
     Calcula preço justo via DCF de 2 estágios sobre FCF alavancado (estilo SWS).
 
-    Estágio 1: taxa decai linearmente do CAGR histórico até TERMINAL_GROWTH ao
-    longo de PROJECTION_YEARS anos.
+    Estágio 1: taxa decai linearmente do crescimento inicial até TERMINAL_GROWTH
+    ao longo de PROJECTION_YEARS anos.
     Estágio 2: perpetuidade de Gordon a TERMINAL_GROWTH.
+
+    Crescimento inicial: por padrão é o CAGR histórico do FCF. Com
+    USE_FORWARD_ESTIMATES ligado, usa a estimativa forward de analistas
+    (yfinance) quando disponível, caindo de volta no CAGR histórico se não for.
 
     O 'Free Cash Flow' do yfinance é OCF − CapEx, com o OCF já líquido de juros
     pagos: é FCFE. O valor presente já é o equity value, sem ajuste de dívida.
@@ -180,15 +221,19 @@ def dcf_valuation(ticker_sa: str, shares_total: float = None,
         ticker_sa: Ticker com sufixo .SA
         shares_total: Total de ações (ON + PN). Se None, resolve via yfinance.
         beta: Beta da ação. Se None, busca do yfinance (fallback 1,0).
+        forward_growth: Crescimento forward já resolvido (decimal). Se None e
+            USE_FORWARD_ESTIMATES estiver ligado, busca via get_forward_growth.
 
     Returns:
-        dict com 'preco_justo_dcf', 'growth_rate', 'fcf_base', 'cost_of_equity'
+        dict com 'preco_justo_dcf', 'growth_rate', 'fcf_base', 'cost_of_equity',
+        'growth_source' ('forward' | 'historical').
     """
     result = {
         'preco_justo_dcf': np.nan,
         'growth_rate': np.nan,
         'fcf_base': np.nan,
         'cost_of_equity': np.nan,
+        'growth_source': 'historical',
     }
 
     try:
@@ -212,7 +257,19 @@ def dcf_valuation(ticker_sa: str, shares_total: float = None,
             return result
 
         coe = cost_of_equity(beta)
+
+        # Crescimento inicial: forward (analistas) se ligado e disponível,
+        # senão CAGR histórico.
         initial_growth = _compute_fcf_cagr(fcf_series)
+        growth_source = 'historical'
+        if USE_FORWARD_ESTIMATES:
+            if forward_growth is None:
+                forward_growth = get_forward_growth(ticker_sa)
+            if forward_growth is not None and pd.notna(forward_growth):
+                initial_growth = max(
+                    MIN_GROWTH_RATE, min(MAX_GROWTH_RATE, float(forward_growth))
+                )
+                growth_source = 'forward'
 
         result['preco_justo_dcf'] = discount_fcf_to_equity(
             fcf_base=fcf_base,
@@ -223,6 +280,7 @@ def dcf_valuation(ticker_sa: str, shares_total: float = None,
         result['growth_rate'] = initial_growth
         result['fcf_base'] = fcf_base
         result['cost_of_equity'] = coe
+        result['growth_source'] = growth_source
 
     except Exception as e:
         print(f"[valuation] DCF erro para {ticker_sa}: {e}")
@@ -373,6 +431,8 @@ def apply_valuation(df: pd.DataFrame, all_fundamentals: pd.DataFrame,
     primary_prices = []
     graham_prices = []
     coes = []
+    methods = []
+    growth_sources = []
 
     for _, row in df.iterrows():
         # Beta do SETOR, não da empresa: small caps ilíquidas medem beta
@@ -380,6 +440,8 @@ def apply_valuation(df: pd.DataFrame, all_fundamentals: pd.DataFrame,
         beta = sector_betas.get(row.get('setor', ''), np.nan)
         coe = cost_of_equity(beta)
         coes.append(coe)
+
+        growth_source = ''
 
         # --- Modelo primário ---
         if model == 'bank':
@@ -389,6 +451,7 @@ def apply_valuation(df: pd.DataFrame, all_fundamentals: pd.DataFrame,
                 roe_decimal = roe_decimal / 100.0
             vpa = row.get('vpa', np.nan)
             primary_price = excess_returns_valuation(roe_decimal, vpa, coe=coe)
+            method = 'excess_returns' if pd.notna(primary_price) else 'none'
         else:
             # DCF 2-estágios para ações
             dcf_result = dcf_valuation(
@@ -398,12 +461,20 @@ def apply_valuation(df: pd.DataFrame, all_fundamentals: pd.DataFrame,
             )
             primary_price = dcf_result['preco_justo_dcf']
 
-            # Fallback DDM se DCF retornar NaN
-            if pd.isna(primary_price):
+            if pd.notna(primary_price):
+                method = 'dcf'
+                growth_source = dcf_result['growth_source']
+            else:
+                # Fallback DDM quando o DCF não é aplicável (ex.: FCF histórico
+                # negativo em incorporadoras). Rotulado explicitamente para não
+                # se confundir com um DCF de verdade.
                 dps = row.get('dividend_rate', np.nan)
                 primary_price = ddm_valuation(dps, discount_rate=coe)
+                method = 'ddm' if pd.notna(primary_price) else 'none'
 
         primary_prices.append(primary_price)
+        methods.append(method)
+        growth_sources.append(growth_source)
 
         # --- Graham (secundário, igual para ambos) ---
         sector = row.get('setor', '')
@@ -421,6 +492,8 @@ def apply_valuation(df: pd.DataFrame, all_fundamentals: pd.DataFrame,
 
     df = df.copy()
     df['preco_justo_dcf'] = primary_prices
+    df['metodo_valuation'] = methods
+    df['growth_source'] = growth_sources
     df['preco_justo_graham'] = graham_prices
     df['cost_of_equity_pct'] = [c * 100 for c in coes]
 
@@ -453,3 +526,62 @@ def apply_valuation(df: pd.DataFrame, all_fundamentals: pd.DataFrame,
           f"{n_forte} com forte desconto (≥{MIN_SAFETY_MARGIN_PCT:.0f}%)")
 
     return df
+
+
+# Histórico de valuation: uma linha por (data, ticker), append-only, para
+# medir o drift do preço justo conforme fundamentos/estimativas/macro mudam.
+DATA_DIR = Path(__file__).resolve().parent.parent / 'data'
+VALUATION_HISTORY = DATA_DIR / 'valuation_history.csv'
+
+# Colunas do resultado que são snapshotadas (as que existirem no df).
+_SNAPSHOT_RESULT_COLS = [
+    'tipo', 'ticker', 'nome', 'setor', 'preco',
+    'preco_justo_dcf', 'metodo_valuation', 'growth_source',
+    'preco_justo_graham', 'margem_seg_dcf_pct', 'margem_seg_graham_pct',
+    'margem_seg_media_pct', 'undervalued', 'forte_desconto',
+    'cost_of_equity_pct',
+]
+
+
+def append_snapshot(df: pd.DataFrame, path: Path = None,
+                    snapshot_date: str = None) -> Path:
+    """
+    Anexa o resultado de valuation ao histórico append-only.
+
+    Cada linha carrega, além do preço justo e da margem, as PREMISSAS usadas na
+    rodada (RF, ERP, crescimento terminal, flag forward) — assim uma divergência
+    futura pode ser atribuída a mudança de dado ou de premissa.
+
+    Args:
+        df: DataFrame vindo de apply_valuation (opcionalmente com 'tipo').
+        path: Destino. Default: data/valuation_history.csv.
+        snapshot_date: Data ISO (YYYY-MM-DD). Default: hoje.
+
+    Returns:
+        O Path do arquivo escrito.
+    """
+    path = Path(path) if path is not None else VALUATION_HISTORY
+    if snapshot_date is None:
+        snapshot_date = pd.Timestamp.today().strftime('%Y-%m-%d')
+
+    if df is None or len(df) == 0:
+        print("[valuation] snapshot vazio, nada a gravar")
+        return path
+
+    cols = [c for c in _SNAPSHOT_RESULT_COLS if c in df.columns]
+    snap = df[cols].copy()
+    snap.insert(0, 'data_snapshot', snapshot_date)
+
+    # Premissas da rodada (mesmas para todas as linhas).
+    snap['risk_free_rate'] = RISK_FREE_RATE
+    snap['equity_risk_premium'] = EQUITY_RISK_PREMIUM
+    snap['terminal_growth'] = TERMINAL_GROWTH
+    snap['use_forward_estimates'] = USE_FORWARD_ESTIMATES
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_header = not path.exists()
+    snap.to_csv(path, mode='a', header=write_header, index=False)
+
+    print(f"[valuation] snapshot de {len(snap)} linhas anexado a {path} "
+          f"(data={snapshot_date})")
+    return path
