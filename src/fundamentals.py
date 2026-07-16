@@ -39,6 +39,61 @@ def _extract_financial_series(df_fin, labels):
     return pd.Series(dtype=float)
 
 
+def resolve_share_count(info: dict, balance_shares: float = None) -> float:
+    """
+    Retorna o número TOTAL de ações da empresa (ON + PN).
+
+    `sharesOutstanding` do yfinance traz apenas a classe do ticker cotado — para
+    RSUL4 (PN) retorna 2.495.225, enquanto a Riosulense tem 6.072.128 no total.
+    Como o DCF produz o equity value da empresa inteira, dividir pela classe
+    isolada inflava o preço justo em 2,4x.
+    """
+    for candidate in (info.get('impliedSharesOutstanding'),
+                      balance_shares,
+                      info.get('sharesOutstanding')):
+        if candidate is not None and pd.notna(candidate) and candidate > 0:
+            return float(candidate)
+    return np.nan
+
+
+def fetch_betas(tickers_sa: list[str], index_symbol: str = '^BVSP',
+                period: str = '5y') -> pd.Series:
+    """
+    Calcula o beta de cada ticker por regressão dos retornos semanais contra o
+    Ibovespa, em um único download em lote.
+
+    O campo `beta` do yfinance é inutilizável para ações brasileiras
+    (PETR4 = -0,139, WEGE3 = -0,077), por isso regredimos nós mesmos.
+
+    Returns:
+        Series indexada por ticker_sa com o beta (NaN quando indeterminável)
+    """
+    from src.valuation import compute_beta
+
+    symbols = list(dict.fromkeys(list(tickers_sa) + [index_symbol]))
+    px = yf.download(symbols, period=period, interval='1wk',
+                     progress=False, auto_adjust=True)['Close']
+
+    returns = px.pct_change()
+    if index_symbol not in returns.columns:
+        print(f"[fundamentals] {index_symbol} indisponível — betas não calculados")
+        return pd.Series(dtype=float)
+
+    market = returns[index_symbol].dropna()
+
+    betas = {}
+    for ticker_sa in tickers_sa:
+        if ticker_sa not in returns.columns:
+            betas[ticker_sa] = np.nan
+            continue
+        betas[ticker_sa] = compute_beta(returns[ticker_sa].dropna(), market)
+
+    result = pd.Series(betas, name='beta_raw')
+    print(f"[fundamentals] beta calculado vs {index_symbol} para "
+          f"{result.notna().sum()}/{len(result)} tickers")
+    return result
+
+
 def fetch_fundamentals(tickers_sa: list[str], delay: float = 0.5,
                        force_refresh: bool = False) -> pd.DataFrame:
     """
@@ -186,6 +241,14 @@ def _fetch_fundamentals_from_api(tickers_sa: list[str], delay: float) -> pd.Data
             ])
             fcf_latest = fcf_series.iloc[0] if not fcf_series.empty else np.nan
 
+            # Total de ações (ON + PN). sharesOutstanding traz só a classe do
+            # ticker cotado, o que subestima o denominador do DCF em empresas
+            # com duas classes (RSUL4: 2,5M PN vs 6,07M no total).
+            balance_shares = _extract_financial_value(balance, [
+                'Ordinary Shares Number', 'Share Issued'
+            ])
+            shares_total = resolve_share_count(info, balance_shares)
+
             records.append({
                 'ticker_sa': ticker_sa,
                 'ticker': ticker_sa.replace('.SA', ''),
@@ -210,6 +273,7 @@ def _fetch_fundamentals_from_api(tickers_sa: list[str], delay: float) -> pd.Data
                 'ebit': ebit,
                 'fcf_latest': fcf_latest,
                 'shares_outstanding': shares_outstanding,
+                'shares_total': shares_total,
                 'dividend_rate': dividend_rate,
             })
 
@@ -225,7 +289,7 @@ def _fetch_fundamentals_from_api(tickers_sa: list[str], delay: float) -> pd.Data
                     'preco', 'pl', 'pvp', 'margem_ebit_pct', 'margem_liquida_pct',
                     'dl_ebit', 'dl_pl', 'roe_pct', 'liquidez_corrente', 'passivos_ativos',
                     'liq_media_diaria', 'lpa', 'vpa', 'dy_pct', 'divida_liquida',
-                    'ebit', 'fcf_latest', 'shares_outstanding',
+                    'ebit', 'fcf_latest', 'shares_outstanding', 'shares_total',
                     'dividend_rate',
                 ]}
             })
@@ -233,6 +297,9 @@ def _fetch_fundamentals_from_api(tickers_sa: list[str], delay: float) -> pd.Data
         time.sleep(delay)
 
     df = pd.DataFrame(records)
+
+    # Beta por regressão vs Ibovespa (download em lote, fora do loop acima)
+    df['beta_raw'] = df['ticker_sa'].map(fetch_betas(tickers_sa))
 
     # Salvar cache
     DATA_DIR.mkdir(parents=True, exist_ok=True)

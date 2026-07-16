@@ -1,21 +1,108 @@
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from src.fundamentals import get_fcf_series
+from src.fundamentals import get_fcf_series, resolve_share_count
 
 # Parâmetros de valuation
-SELIC = 0.1425           # Taxa de desconto (WACC proxy) e cost of equity
-TERMINAL_GROWTH = 0.035  # Crescimento terminal (inflação LP Brasil)
-PROJECTION_YEARS = 10    # Horizonte de projeção (2 estágios: decay linear)
-MAX_GROWTH_RATE = 0.20   # Cap de crescimento anual
-MIN_GROWTH_RATE = 0.0    # Floor de crescimento
+# Todas as taxas são NOMINAIS (em R$ corrente), coerentes entre si.
+RISK_FREE_RATE = 0.124     # Média 5 anos do título longo do governo BR (fonte SWS)
+EQUITY_RISK_PREMIUM = 0.075  # Prêmio de risco de mercado BR (S&P Global, via SWS)
+TERMINAL_GROWTH = RISK_FREE_RATE  # Perpetuidade não pode exceder a economia
+PROJECTION_YEARS = 10      # Horizonte de projeção (2 estágios: decay linear)
+MAX_GROWTH_RATE = 0.20     # Cap de crescimento anual
+MIN_GROWTH_RATE = 0.0      # Floor de crescimento
+MIN_BETA = 0.5             # Clamp de beta (regressões de small caps produzem outliers)
+MAX_BETA = 2.5
+MIN_BETA_OBSERVATIONS = 30  # Mínimo de semanas para uma regressão de beta confiável
+MIN_MARKET_VARIANCE = 1e-12  # Abaixo disso a série é degenerada (retorno constante)
 MIN_SAFETY_MARGIN_PCT = 20.0  # Margem de segurança mínima para "forte desconto" (inspirado SWS)
+
+MARKET_INDEX = '^BVSP'     # Benchmark para o beta (Ibovespa)
+
+
+def compute_beta(stock_returns: pd.Series, market_returns: pd.Series) -> float:
+    """
+    Beta via regressão dos retornos da ação contra o mercado: cov / var.
+
+    Não usamos o campo `beta` do yfinance: para ações brasileiras ele vem
+    inutilizável (PETR4 = -0,139, WEGE3 = -0,077), aparentemente medido contra
+    um benchmark errado.
+    """
+    joined = pd.concat([stock_returns, market_returns], axis=1, join='inner').dropna()
+    if len(joined) < MIN_BETA_OBSERVATIONS:
+        return np.nan
+
+    stock_col, market_col = joined.iloc[:, 0], joined.iloc[:, 1]
+    market_var = market_col.var()
+    # Comparar com epsilon, não com zero: a variância de uma série constante
+    # sai como ~3e-36 (ruído de ponto flutuante), e cov/var devolveria um beta
+    # fabricado a partir desse ruído em vez de NaN.
+    if pd.isna(market_var) or market_var < MIN_MARKET_VARIANCE:
+        return np.nan
+
+    return stock_col.cov(market_col) / market_var
+
+
+def compute_sector_betas(df: pd.DataFrame) -> dict:
+    """
+    Mediana do beta por setor, a partir da coluna `beta_raw`.
+
+    Usamos o beta do SETOR, não o da empresa: papéis ilíquidos medem beta
+    artificialmente baixo porque simplesmente não negociam (RSUL4 regride 0,155
+    negociando R$ 273k/dia — artefato de não-negociação, não baixo risco). A
+    Simply Wall St usa beta setorial pelo mesmo motivo.
+    """
+    if 'beta_raw' not in df.columns:
+        return {}
+
+    valid = df[df['beta_raw'].notna()]
+
+    sector_betas = {}
+    for sector, group in valid.groupby('setor'):
+        if not sector:
+            continue
+        sector_betas[sector] = float(group['beta_raw'].median())
+
+    return sector_betas
+
+
+def cost_of_equity(beta: float = None) -> float:
+    """
+    Custo de capital próprio via CAPM: RF + beta × ERP.
+
+    A versão anterior usava a Selic pura, que é a taxa LIVRE DE RISCO — descontar
+    fluxos de equity a ela omite o prêmio de risco inteiro e superestima
+    sistematicamente o preço justo.
+    """
+    if beta is None or pd.isna(beta):
+        beta = 1.0
+    beta = max(MIN_BETA, min(MAX_BETA, float(beta)))
+    return RISK_FREE_RATE + beta * EQUITY_RISK_PREMIUM
+
+
+def compute_fcf_base(fcf_series: pd.Series) -> float:
+    """
+    Base de FCF para o DCF: mediana da série histórica.
+
+    Usar o ano mais recente ancora a projeção no pico do ciclo (RSUL4: 41,8M no
+    último ano vs. mediana de 28,3M). A mediana resiste tanto ao pico quanto ao
+    ano negativo isolado.
+    """
+    if fcf_series.empty:
+        return np.nan
+    base = float(np.median(fcf_series.values))
+    return base if base > 0 else np.nan
 
 
 def _compute_fcf_cagr(fcf_series: pd.Series) -> float:
     """
     Calcula CAGR do Free Cash Flow a partir da série histórica.
     A série vem do yfinance com o mais recente primeiro.
+
+    Qualquer ano negativo zera o crescimento: uma série que passa pelo prejuízo
+    não sustenta extrapolação de crescimento composto. A versão anterior pulava
+    os negativos e media apenas entre os pontos positivos, o que transformava a
+    série cíclica da RSUL4 (21,2M → -9,8M → 41,8M) em "25% a.a.".
     """
     if len(fcf_series) < 2:
         return 0.0
@@ -23,130 +110,119 @@ def _compute_fcf_cagr(fcf_series: pd.Series) -> float:
     # Ordenar do mais antigo ao mais recente
     values = fcf_series.values[::-1]
 
-    # Precisamos de valores positivos para calcular CAGR
-    first_positive = None
-    last_positive = None
-    first_idx = None
-    last_idx = None
-
-    for i, v in enumerate(values):
-        if v > 0:
-            if first_positive is None:
-                first_positive = v
-                first_idx = i
-            last_positive = v
-            last_idx = i
-
-    if first_positive is None or last_positive is None or first_idx == last_idx:
+    if any(v <= 0 for v in values):
         return 0.0
 
-    n_years = last_idx - first_idx
-    if n_years <= 0:
-        return 0.0
+    first, last = values[0], values[-1]
+    n_years = len(values) - 1
 
-    cagr = (last_positive / first_positive) ** (1 / n_years) - 1
+    cagr = (last / first) ** (1 / n_years) - 1
 
     # Aplicar limites
     return max(MIN_GROWTH_RATE, min(MAX_GROWTH_RATE, cagr))
 
 
-def dcf_valuation(ticker_sa: str, shares_outstanding: float = None,
-                  net_debt: float = None) -> dict:
+def discount_fcf_to_equity(fcf_base: float, growth: float, discount_rate: float,
+                           shares: float, terminal_growth: float = TERMINAL_GROWTH,
+                           years: int = PROJECTION_YEARS) -> float:
     """
-    Calcula preço justo via DCF de 2 estágios (inspirado Simply Wall St).
+    DCF 2-estágios sobre Free Cash Flow ALAVANCADO, retornando preço por ação.
 
-    Estágio 1 (alto crescimento): taxa decai linearmente de CAGR histórico
-    até TERMINAL_GROWTH ao longo de PROJECTION_YEARS anos.
-    Estágio 2 (estável): valor terminal via Gordon Growth Model com TERMINAL_GROWTH.
+    O 'Free Cash Flow' do yfinance é OCF − CapEx, e o OCF já é líquido de juros
+    pagos: é FCFE, não FCFF. Portanto o valor presente já é o equity value e NÃO
+    se subtrai dívida líquida dele — o código anterior subtraía, e como a RSUL4
+    tem caixa líquido (dívida líquida negativa) isso somava R$ 4,84/ação.
 
-    A série de FCF do yfinance é desalavancada (FCFF = OCF - CapEx), portanto
-    seu valor presente é o Enterprise Value. Convertemos para Equity Value
-    subtraindo a dívida líquida antes de dividir pelo número de ações.
+    Estágio 1: taxa decai linearmente de `growth` até `terminal_growth`.
+    Estágio 2: perpetuidade de Gordon a `terminal_growth`.
+    """
+    if any(pd.isna(x) for x in [fcf_base, growth, discount_rate, shares, terminal_growth]):
+        return np.nan
+    if fcf_base <= 0 or shares <= 0:
+        return np.nan
+    if discount_rate <= terminal_growth:
+        return np.nan
+
+    projected = []
+    fcf = fcf_base
+    for year in range(1, years + 1):
+        if years > 1:
+            rate = growth - (growth - terminal_growth) * (year - 1) / (years - 1)
+        else:
+            rate = growth
+        fcf = fcf * (1 + rate)
+        projected.append(fcf)
+
+    pv_fcfs = sum(f / (1 + discount_rate) ** t for t, f in enumerate(projected, start=1))
+
+    terminal_value = projected[-1] * (1 + terminal_growth) / (discount_rate - terminal_growth)
+    pv_terminal = terminal_value / (1 + discount_rate) ** years
+
+    equity_value = pv_fcfs + pv_terminal
+    fair_price = equity_value / shares
+
+    return fair_price if fair_price > 0 else np.nan
+
+
+def dcf_valuation(ticker_sa: str, shares_total: float = None,
+                  beta: float = None) -> dict:
+    """
+    Calcula preço justo via DCF de 2 estágios sobre FCF alavancado (estilo SWS).
+
+    Estágio 1: taxa decai linearmente do CAGR histórico até TERMINAL_GROWTH ao
+    longo de PROJECTION_YEARS anos.
+    Estágio 2: perpetuidade de Gordon a TERMINAL_GROWTH.
+
+    O 'Free Cash Flow' do yfinance é OCF − CapEx, com o OCF já líquido de juros
+    pagos: é FCFE. O valor presente já é o equity value, sem ajuste de dívida.
 
     Args:
         ticker_sa: Ticker com sufixo .SA
-        shares_outstanding: Número de ações. Se None, busca do yfinance.
-        net_debt: Dívida líquida (Total Debt - Cash). Se None, busca do yfinance.
+        shares_total: Total de ações (ON + PN). Se None, resolve via yfinance.
+        beta: Beta da ação. Se None, busca do yfinance (fallback 1,0).
 
     Returns:
-        dict com 'preco_justo_dcf', 'growth_rate', 'fcf_base'
+        dict com 'preco_justo_dcf', 'growth_rate', 'fcf_base', 'cost_of_equity'
     """
     result = {
         'preco_justo_dcf': np.nan,
         'growth_rate': np.nan,
         'fcf_base': np.nan,
+        'cost_of_equity': np.nan,
     }
 
     try:
         fcf_series = get_fcf_series(ticker_sa)
-
         if fcf_series.empty:
             return result
 
-        fcf_base = fcf_series.iloc[0]  # FCF mais recente
-        if pd.isna(fcf_base) or fcf_base <= 0:
+        fcf_base = compute_fcf_base(fcf_series)
+        if pd.isna(fcf_base):
             return result
 
-        # Obter shares_outstanding e/ou net_debt do yfinance se não fornecidos
-        if (shares_outstanding is None or pd.isna(shares_outstanding)
-                or net_debt is None or pd.isna(net_debt)):
-            info = yf.Ticker(ticker_sa).info
-            if shares_outstanding is None or pd.isna(shares_outstanding):
-                shares_outstanding = info.get('sharesOutstanding')
-            if net_debt is None or pd.isna(net_debt):
-                total_debt = info.get('totalDebt')
-                total_cash = info.get('totalCash')
-                if total_debt is not None and total_cash is not None:
-                    net_debt = total_debt - total_cash
+        if (shares_total is None or pd.isna(shares_total)
+                or beta is None or pd.isna(beta)):
+            info = yf.Ticker(ticker_sa).info or {}
+            if shares_total is None or pd.isna(shares_total):
+                shares_total = resolve_share_count(info)
+            if beta is None or pd.isna(beta):
+                beta = info.get('beta')
 
-        if shares_outstanding is None or shares_outstanding <= 0:
+        if shares_total is None or pd.isna(shares_total) or shares_total <= 0:
             return result
 
-        # Se a dívida líquida não estiver disponível, assume 0 (sem ajuste),
-        # degradando ao comportamento anterior em vez de abortar o valuation.
-        if net_debt is None or pd.isna(net_debt):
-            net_debt = 0.0
-
-        # Taxa de crescimento histórica (initial rate)
+        coe = cost_of_equity(beta)
         initial_growth = _compute_fcf_cagr(fcf_series)
 
-        # Estágio 1: projetar FCF com taxa decrescente (linear decay)
-        # Ano 1 usa initial_growth, ano PROJECTION_YEARS chega a TERMINAL_GROWTH
-        projected_fcfs = []
-        fcf = fcf_base
-        for year in range(1, PROJECTION_YEARS + 1):
-            if PROJECTION_YEARS > 1:
-                rate = initial_growth - (initial_growth - TERMINAL_GROWTH) * (year - 1) / (PROJECTION_YEARS - 1)
-            else:
-                rate = initial_growth
-            fcf = fcf * (1 + rate)
-            projected_fcfs.append(fcf)
-
-        # Valor presente dos FCFs projetados
-        pv_fcfs = sum(
-            fcf_t / (1 + SELIC) ** t
-            for t, fcf_t in enumerate(projected_fcfs, start=1)
+        result['preco_justo_dcf'] = discount_fcf_to_equity(
+            fcf_base=fcf_base,
+            growth=initial_growth,
+            discount_rate=coe,
+            shares=shares_total,
         )
-
-        # Estágio 2: valor terminal (Gordon Growth Model)
-        terminal_value = (
-            projected_fcfs[-1] * (1 + TERMINAL_GROWTH) /
-            (SELIC - TERMINAL_GROWTH)
-        )
-        pv_terminal = terminal_value / (1 + SELIC) ** PROJECTION_YEARS
-
-        # Enterprise Value (FCF do yfinance é desalavancado)
-        enterprise_value = pv_fcfs + pv_terminal
-
-        # Equity Value = Enterprise Value - Dívida Líquida
-        equity_value = enterprise_value - net_debt
-
-        # Preço justo por ação
-        fair_price = equity_value / shares_outstanding
-
-        result['preco_justo_dcf'] = fair_price if fair_price > 0 else np.nan
         result['growth_rate'] = initial_growth
         result['fcf_base'] = fcf_base
+        result['cost_of_equity'] = coe
 
     except Exception as e:
         print(f"[valuation] DCF erro para {ticker_sa}: {e}")
@@ -155,7 +231,7 @@ def dcf_valuation(ticker_sa: str, shares_outstanding: float = None,
 
 
 def excess_returns_valuation(roe_decimal: float, vpa: float,
-                             cost_of_equity: float = SELIC,
+                             coe: float = None,
                              terminal_growth: float = TERMINAL_GROWTH) -> float:
     """
     Calcula preço justo pelo modelo de Excess Returns (usado para bancos).
@@ -169,27 +245,29 @@ def excess_returns_valuation(roe_decimal: float, vpa: float,
     Args:
         roe_decimal: ROE como decimal (ex: 0.15 para 15%)
         vpa: Valor Patrimonial por Ação
-        cost_of_equity: Custo de capital próprio (default: SELIC)
+        coe: Custo de capital próprio. Se None, usa CAPM com beta 1,0.
         terminal_growth: Taxa de crescimento perpétuo (default: TERMINAL_GROWTH)
 
     Returns:
         Preço justo por ação ou NaN se inválido
     """
-    if any(pd.isna(v) for v in [roe_decimal, vpa, cost_of_equity, terminal_growth]):
+    if coe is None:
+        coe = cost_of_equity()
+    if any(pd.isna(v) for v in [roe_decimal, vpa, coe, terminal_growth]):
         return np.nan
-    if vpa <= 0 or roe_decimal <= cost_of_equity:
+    if vpa <= 0 or roe_decimal <= coe:
         return np.nan
-    if cost_of_equity <= terminal_growth:
+    if coe <= terminal_growth:
         return np.nan
 
-    excess_return = (roe_decimal - cost_of_equity) * vpa
-    terminal_value = excess_return / (cost_of_equity - terminal_growth)
+    excess_return = (roe_decimal - coe) * vpa
+    terminal_value = excess_return / (coe - terminal_growth)
     fair_value = vpa + terminal_value
 
     return fair_value if fair_value > 0 else np.nan
 
 
-def ddm_valuation(dps: float, discount_rate: float = SELIC,
+def ddm_valuation(dps: float, discount_rate: float = None,
                   growth_rate: float = TERMINAL_GROWTH) -> float:
     """
     Calcula preço justo pelo Dividend Discount Model (Gordon Growth).
@@ -199,12 +277,14 @@ def ddm_valuation(dps: float, discount_rate: float = SELIC,
 
     Args:
         dps: Dividendo por ação anual (R$)
-        discount_rate: Taxa de desconto (default: SELIC)
+        discount_rate: Taxa de desconto. Se None, usa CAPM com beta 1,0.
         growth_rate: Taxa de crescimento dos dividendos (default: TERMINAL_GROWTH)
 
     Returns:
         Preço justo por ação ou NaN se inválido
     """
+    if discount_rate is None:
+        discount_rate = cost_of_equity()
     if pd.isna(dps) or dps <= 0:
         return np.nan
     if pd.isna(discount_rate) or pd.isna(growth_rate):
@@ -288,11 +368,19 @@ def apply_valuation(df: pd.DataFrame, all_fundamentals: pd.DataFrame,
         margem_seg_primario_pct, margem_seg_graham_pct, undervalued, forte_desconto
     """
     sector_avgs = compute_sector_averages(all_fundamentals)
+    sector_betas = compute_sector_betas(all_fundamentals)
 
     primary_prices = []
     graham_prices = []
+    coes = []
 
     for _, row in df.iterrows():
+        # Beta do SETOR, não da empresa: small caps ilíquidas medem beta
+        # artificialmente baixo por não negociarem (ver compute_sector_betas).
+        beta = sector_betas.get(row.get('setor', ''), np.nan)
+        coe = cost_of_equity(beta)
+        coes.append(coe)
+
         # --- Modelo primário ---
         if model == 'bank':
             # Excess Returns para bancos
@@ -300,20 +388,20 @@ def apply_valuation(df: pd.DataFrame, all_fundamentals: pd.DataFrame,
             if pd.notna(roe_decimal):
                 roe_decimal = roe_decimal / 100.0
             vpa = row.get('vpa', np.nan)
-            primary_price = excess_returns_valuation(roe_decimal, vpa)
+            primary_price = excess_returns_valuation(roe_decimal, vpa, coe=coe)
         else:
             # DCF 2-estágios para ações
             dcf_result = dcf_valuation(
                 row['ticker_sa'],
-                row.get('shares_outstanding'),
-                row.get('divida_liquida'),
+                row.get('shares_total'),
+                beta,
             )
             primary_price = dcf_result['preco_justo_dcf']
 
             # Fallback DDM se DCF retornar NaN
             if pd.isna(primary_price):
                 dps = row.get('dividend_rate', np.nan)
-                primary_price = ddm_valuation(dps)
+                primary_price = ddm_valuation(dps, discount_rate=coe)
 
         primary_prices.append(primary_price)
 
@@ -334,6 +422,7 @@ def apply_valuation(df: pd.DataFrame, all_fundamentals: pd.DataFrame,
     df = df.copy()
     df['preco_justo_dcf'] = primary_prices
     df['preco_justo_graham'] = graham_prices
+    df['cost_of_equity_pct'] = [c * 100 for c in coes]
 
     # Margem de segurança: (preço_justo - preço_mercado) / preço_justo × 100
     df['margem_seg_dcf_pct'] = (
