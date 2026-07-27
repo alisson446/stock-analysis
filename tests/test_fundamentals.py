@@ -73,3 +73,52 @@ class TestGetForwardGrowth:
     def test_returns_nan_on_exception(self, monkeypatch):
         self._patch(monkeypatch, RuntimeError('boom'))
         assert np.isnan(f.get_forward_growth('X.SA'))
+
+
+def _quarterly(net_income_by_label: dict, n_cols: int = 5):
+    """Monta um quarterly_income_stmt no layout do yfinance (linhas=contas,
+    colunas=datas, mais recente à esquerda)."""
+    dates = pd.date_range('2026-03-31', periods=n_cols, freq='-3ME')
+    return pd.DataFrame(net_income_by_label, index=dates).T
+
+
+class TestComputeTTMNetIncome:
+    """
+    O trailingEps/trailingPE do Yahoo erram a contagem de ações em várias ações
+    BR, então o lucro TTM dos controladores vem do .info ou da soma de 4
+    trimestres — nunca do número pronto do Yahoo.
+    """
+
+    def test_prefers_net_income_to_common_from_info(self):
+        # netIncomeToCommon já é TTM e dos controladores: usa direto, ignora tri.
+        qi = _quarterly({'Net Income': [1, 1, 1, 1, 1]})
+        assert f.compute_ttm_net_income(
+            {'netIncomeToCommon': 216_292_992}, qi) == 216_292_992
+
+    def test_sums_last_four_quarters_when_info_missing(self):
+        # EVEN3: soma dos 4 trimestres mais recentes (ignora o 5º, mais antigo).
+        qi = _quarterly({'Net Income Common Stockholders':
+                         [32.5, 44.9, 90.0, 48.9, 53.9]})
+        assert f.compute_ttm_net_income({}, qi) == pytest.approx(216.3)
+
+    def test_prefers_common_stockholders_over_net_income(self):
+        # Holding: usa o lucro dos controladores, nunca o que inclui minoritários.
+        qi = _quarterly({
+            'Net Income Common Stockholders': [10, 10, 10, 10, 10],
+            'Net Income': [99, 99, 99, 99, 99],
+        })
+        assert f.compute_ttm_net_income({}, qi) == pytest.approx(40)
+
+    def test_returns_nan_when_fewer_than_four_quarters(self):
+        qi = _quarterly({'Net Income': [10, 10, 10]}, n_cols=3)
+        assert np.isnan(f.compute_ttm_net_income({}, qi))
+
+    def test_never_falls_back_to_trailing_eps(self):
+        # Sem lucro confiável -> NaN, mesmo que o .info traga trailingEps.
+        assert np.isnan(f.compute_ttm_net_income(
+            {'trailingEps': 7.28}, pd.DataFrame()))
+
+    def test_ignores_zero_net_income_to_common(self):
+        qi = _quarterly({'Net Income': [5, 5, 5, 5, 5]})
+        assert f.compute_ttm_net_income(
+            {'netIncomeToCommon': 0}, qi) == pytest.approx(20)

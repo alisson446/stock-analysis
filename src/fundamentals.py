@@ -56,6 +56,43 @@ def resolve_share_count(info: dict, balance_shares: float = None) -> float:
     return np.nan
 
 
+# Lucro líquido atribuível aos controladores, do mais específico ao mais amplo.
+# Nunca usamos 'Net Income Including Noncontrolling Interests' — para holdings
+# (EVEN3: R$273,8M com minoritários vs R$216,3M dos controladores) isso inflaria
+# o LPA. Os sites BR (Status Invest/Fundamentus) usam o lucro dos controladores.
+_NET_INCOME_COMMON_LABELS = ('Net Income Common Stockholders', 'Net Income')
+
+
+def compute_ttm_net_income(info: dict, quarterly_income) -> float:
+    """
+    Lucro líquido dos últimos 12 meses (TTM) atribuível aos controladores.
+
+    O `trailingEps`/`trailingPE` do `.info` usam uma contagem de ações errada
+    para várias ações BR — EVEN3: o trailingEps implica ~109M ações vs 198M
+    reais; SEER3: ~34M vs 128M — subestimando o P/L em 2 a 4x (EVEN3 aparece
+    como 2,49 quando o real é 4,55; SEER3 como 1,58 vs 5,95). Por isso
+    recalculamos o P/L a partir deste lucro dividido pelo total de ações
+    (`resolve_share_count`), em vez de confiar no número pronto do Yahoo.
+
+    Prioridade:
+        1. `netIncomeToCommon` do `.info` (já é TTM e dos controladores);
+        2. soma dos últimos 4 trimestres de `quarterly_income_stmt`.
+
+    Retorna NaN quando nenhuma fonte confiável existe — nunca caímos de volta no
+    `trailingEps` do Yahoo, que é justamente o valor defeituoso.
+    """
+    v = info.get('netIncomeToCommon')
+    if v is not None and pd.notna(v) and v != 0:
+        return float(v)
+
+    for label in _NET_INCOME_COMMON_LABELS:
+        series = _extract_financial_series(quarterly_income, [label])
+        if len(series) >= 4:
+            return float(series.iloc[:4].sum())
+
+    return np.nan
+
+
 def fetch_betas(tickers_sa: list[str], index_symbol: str = '^BVSP',
                 period: str = '5y') -> pd.Series:
     """
@@ -126,14 +163,14 @@ def _fetch_fundamentals_from_api(tickers_sa: list[str], delay: float) -> pd.Data
             stock = yf.Ticker(ticker_sa)
             info = stock.info or {}
 
-            # Dados básicos do .info
+            # Dados básicos do .info. P/L e LPA NÃO vêm do .info: o trailingPE/
+            # trailingEps do Yahoo usam contagem de ações errada em várias ações
+            # BR e são recalculados abaixo (ver compute_ttm_net_income).
             current_price = _safe_get(info, 'currentPrice')
-            pe_ratio = _safe_get(info, 'trailingPE')
             pb_ratio = _safe_get(info, 'priceToBook')
             profit_margin = _safe_get(info, 'profitMargins')
             roe = _safe_get(info, 'returnOnEquity')
             current_ratio = _safe_get(info, 'currentRatio')
-            eps = _safe_get(info, 'trailingEps')
             avg_volume = _safe_get(info, 'averageDailyVolume10Day')
             shares_outstanding = _safe_get(info, 'sharesOutstanding')
             sector = _safe_get(info, 'sector', '')
@@ -158,9 +195,10 @@ def _fetch_fundamentals_from_api(tickers_sa: list[str], delay: float) -> pd.Data
                                 else np.nan)
 
             # --- Dados dos demonstrativos financeiros ---
-            financials = stock.financials  # DRE anual
-            balance = stock.balance_sheet  # Balanço Patrimonial
-            cashflow = stock.cashflow      # Fluxo de Caixa
+            financials = stock.financials              # DRE anual
+            quarterly_income = stock.quarterly_income_stmt  # DRE trimestral (TTM)
+            balance = stock.balance_sheet              # Balanço Patrimonial
+            cashflow = stock.cashflow                  # Fluxo de Caixa
 
             # Margem EBIT = EBIT / Receita Total
             ebit = _extract_financial_value(financials, ['EBIT', 'Ebit'])
@@ -248,6 +286,17 @@ def _fetch_fundamentals_from_api(tickers_sa: list[str], delay: float) -> pd.Data
                 'Ordinary Shares Number', 'Share Issued'
             ])
             shares_total = resolve_share_count(info, balance_shares)
+
+            # P/L e LPA recalculados: lucro TTM dos controladores / total de ações.
+            # Substitui o trailingPE/trailingEps do Yahoo, que erra a contagem de
+            # ações em várias ações BR (ver compute_ttm_net_income).
+            lucro_ttm = compute_ttm_net_income(info, quarterly_income)
+            eps = (lucro_ttm / shares_total
+                   if pd.notna(lucro_ttm) and pd.notna(shares_total) and shares_total != 0
+                   else np.nan)
+            pe_ratio = (current_price / eps
+                        if pd.notna(current_price) and pd.notna(eps) and eps > 0
+                        else np.nan)
 
             records.append({
                 'ticker_sa': ticker_sa,
