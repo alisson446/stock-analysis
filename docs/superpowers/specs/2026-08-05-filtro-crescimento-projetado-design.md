@@ -51,42 +51,29 @@ mínimo de 1. KEPL3 tem 1 analista; LAVV3 e TRIS3 têm 2. No universo completo, 
 projetando +143% de crescimento de lucro e VVEO3 tem 4 projetando +175% — ruído, não previsão. Daí a
 existência do parâmetro `num_analistas_min`.
 
-## Decisão de desenho: ausência de dado é configurável
+## Decisão de desenho: dois critérios independentes, cada um com sua flag
 
 Ausência de estimativa não é informação sobre a empresa, é informação sobre a cobertura do sell-side —
-que em small caps BR correlaciona com liquidez, não com qualidade. Reprovar por ausência descarta
-ações boas por obscuridade; um filtro estrito derruba as 28 ações atuais para 11.
+que em small caps BR correlaciona com liquidez, não com qualidade. Reprovar por ausência descarta ações
+boas por obscuridade: exigir estimativa completa com pelo menos 3 analistas derruba as 28 ações atuais
+para 11. Por outro lado, rodar DCF sobre empresa que o consenso projeta encolhendo é exatamente o que
+esta spec quer evitar. Nenhum dos dois lados é certo o tempo todo, então a escolha fica no JSON.
 
-O comportamento é controlado por `exigir_estimativa`, com `false` como default.
+São **duas flags independentes**, cada uma ligando e desligando o seu próprio critério. Não há cascata
+entre elas: nenhuma altera o significado da outra.
 
-`num_analistas_min` age **antes** dos cortes de crescimento, como porta de qualidade do dado, e não
-como um critério paralelo. `exigir_num_analistas` liga e desliga essa porta:
+| Flag | `true` | `false` |
+|---|---|---|
+| `exigir_estimativa` | aplica `crescimento_receita_pct_min` e `crescimento_lucro_pct_min`; valor NaN reprova | os dois cortes não são aplicados |
+| `exigir_num_analistas` | aplica `num_analistas_min`; `num_analistas` NaN reprova | `num_analistas_min` não é aplicado |
 
-```
-exigir_num_analistas: true  e  analistas < num_analistas_min  →  estimativa tratada como ausente (NaN)
-(analistas NaN conta como abaixo do mínimo)                        ↓
-                                             exigir_estimativa decide o que fazer com NaN
-                                                true  → reprova
-                                                false → passa para o valuation
-                                                                   ↓
-                                       tendo dado válido, aplica os cortes de crescimento
-```
+Em ambos os casos, NaN reprova quando a flag está ligada: sem dado não há como atestar o critério, e o
+propósito da flag é justamente exigi-lo. Quem quiser o comportamento permissivo desliga a flag.
 
-Poucos analistas significa "não sei", não "crescimento ruim". Colapsar esse caso em NaN dá um único
-caminho de decisão, em vez de uma tabela-verdade de quatro casos.
-
-`num_analistas` ausente (NaN) conta como abaixo do mínimo: sem saber a cobertura, não dá para atestar
-a qualidade do dado.
-
-**A porta de analistas pode ser mais permissiva, não mais restritiva.** Consequência do desenho que vale
-registrar: com `exigir_estimativa: false`, ligar `exigir_num_analistas` faz uma ação com poucos analistas
-e crescimento projetado *negativo* virar NaN e **passar**, quando sem a porta ela seria reprovada pelo
-corte de crescimento. É coerente — a tese é que estimativa de 1 analista não é informação suficiente nem
-para aprovar nem para reprovar — mas é o oposto do que "exigir mais analistas" sugere à primeira vista.
-Para que a porta restrinja, é preciso `exigir_estimativa: true` junto.
-
-Nenhuma das 28 ações atuais cai nesse caso (a única com menos de 2 analistas, KEPL3, projeta crescimento
-positivo), então a combinação não muda o resultado hoje.
+Uma versão anterior deste desenho encadeava as duas — poucos analistas rebaixava a estimativa a NaN, que
+então caía na regra de `exigir_estimativa`. Foi descartado: produzia o resultado invertido de a porta de
+analistas tornar o filtro *mais permissivo* em vez de mais restritivo, e exigia uma tabela-verdade de
+quatro casos para descrever duas flags. Independentes, cada flag faz exatamente o que o nome diz.
 
 ## Componentes
 
@@ -135,12 +122,14 @@ Os mesmos cinco parâmetros nos dois blocos, `stock_filters` e `bank_filters`:
 "crescimento_receita_pct_min": 0,
 "crescimento_lucro_pct_min": 0,
 "num_analistas_min": 2,
-"exigir_num_analistas": true,
+"exigir_num_analistas": false,
 "exigir_estimativa": false
 ```
 
-`exigir_num_analistas: false` ignora `num_analistas_min` por completo, preservando o valor configurado
-para quando for religado.
+As duas flags nascem desligadas: o screening sai desta spec com o mesmo resultado de hoje, e os cortes
+entram quando você quiser. Desligar uma flag preserva o limiar configurado ao lado dela para quando for
+religada — é essa a razão de existirem, já que `num_analistas_min: 0` e cortes em `-inf` desligariam os
+critérios ao custo de perder o valor ajustado.
 
 ### 4. Filtragem — `src/filters.py`
 
@@ -148,23 +137,24 @@ para quando for religado.
 dois, extrair uma função auxiliar `_growth_mask(df, cfg)` que recebe o bloco de config e devolve a
 máscara booleana, chamada pelas duas.
 
-A máscara implementa o fluxo da seção de desenho:
+A máscara começa como "tudo passa" e cada flag ligada acrescenta a sua condição:
 
-1. Se `exigir_num_analistas` for `true`, estimativas com `num_analistas < num_analistas_min` ou
-   `num_analistas` NaN são tratadas como NaN. Se for `false`, esta etapa é pulada e
-   `num_analistas_min` não é lido.
-2. Linhas com crescimento de receita ou de lucro NaN passam se `exigir_estimativa` for `false`,
-   reprovam se for `true`.
-3. Linhas com ambos os valores válidos passam se `crescimento_receita_pct > crescimento_receita_pct_min`
-   e `crescimento_lucro_pct > crescimento_lucro_pct_min`.
+1. Se `exigir_estimativa` for `true`, exige `crescimento_receita_pct > crescimento_receita_pct_min` **e**
+   `crescimento_lucro_pct > crescimento_lucro_pct_min`. NaN em qualquer uma das duas reprova. Se for
+   `false`, nenhum dos dois cortes é lido.
+2. Se `exigir_num_analistas` for `true`, exige `num_analistas >= num_analistas_min`. NaN reprova. Se for
+   `false`, `num_analistas_min` não é lido.
 
-Comparação estrita (`>`), seguindo a convenção dos demais critérios `_min` do projeto
-(`df['roe_pct'] > cfg['roe_pct_min']`, `df['lpa'] > cfg['lpa_min']`). Com o default `0`, crescimento
-projetado exatamente nulo reprova.
+Comparação estrita (`>`) nos cortes de crescimento, seguindo a convenção dos demais critérios `_min` do
+projeto (`df['roe_pct'] > cfg['roe_pct_min']`, `df['lpa'] > cfg['lpa_min']`). Com o default `0`,
+crescimento projetado exatamente nulo reprova.
 
-Note que a regra 2 reprova, sob `exigir_estimativa: true`, a linha que tem apenas uma das duas
-estimativas — POMO3 tem crescimento de receita mas não de lucro, por exemplo. É a leitura literal de
-"exigir estimativa" e está explícita aqui para não virar surpresa.
+`num_analistas_min` usa `>=` porque é uma contagem: `num_analistas_min: 2` significa "pelo menos dois
+analistas", não "mais de dois".
+
+Sob `exigir_estimativa: true`, a linha que tem apenas uma das duas estimativas reprova — POMO3 tem
+crescimento de receita mas não de lucro, por exemplo. É a leitura literal de "exigir estimativa" e está
+explícita aqui para não virar surpresa.
 
 O `print` de resultado de cada função passa a informar quantas reprovaram por crescimento, separando do
 total, para o efeito do filtro novo ficar visível na saída do notebook.
@@ -179,15 +169,21 @@ A célula markdown de critérios é atualizada com os critérios novos.
 
 ## Efeito esperado
 
-Com os defaults (`exigir_estimativa: false`, `exigir_num_analistas: true`, `num_analistas_min: 2`,
-cortes em 0), sobre as 28 ações atuais: **reprova 2** — SUZB3 (lucro projetado -2,4%, 7 analistas) e
-RANI3 (-11,7%, 3 analistas). KEPL3 tem 1 analista, cai para NaN e passa.
+Sobre as 28 ações que passam nos filtros hoje, com `num_analistas_min: 2` e cortes em 0:
 
-Desligar `exigir_num_analistas` não muda nada hoje: KEPL3 passa a ser avaliada pelos cortes e, com
-+6,0% de receita e +12,8% de lucro, passa de qualquer forma.
+| `exigir_estimativa` | `exigir_num_analistas` | Passam |
+|---|---|---|
+| `false` | `false` | 28 — filtro inerte, é o default |
+| `false` | `true` | 16 |
+| `true` | `false` | 15 |
+| `true` | `true` | 14 |
 
-Com `exigir_estimativa: true` e `num_analistas_min: 3`: **28 → 11**. Sobram CYRE3, RECV3, EZTC3, SEER3,
-INTB3, EVEN3, MELK3, MDNE3, RIAA3, VTRU3, BLAU3.
+Com as duas ligadas, reprovam: SUZB3 e RANI3 por lucro projetado negativo (-2,4% e -11,7%); KEPL3 por ter
+1 analista; e as 11 sem estimativa completa — POMO3, GRND3, SHUL4, TECN3, VLID3, CYRE4, EUCA4, IGTI3,
+LPSB3, CSUD3, RSUL4.
+
+Subindo `num_analistas_min` para 3 com as duas flags ligadas: **28 → 11**. Sobram CYRE3, RECV3, EZTC3,
+SEER3, INTB3, EVEN3, MELK3, MDNE3, RIAA3, VTRU3, BLAU3.
 
 Os dois extremos ficam a uma edição de JSON de distância, que é o objetivo do desenho configurável.
 
@@ -196,18 +192,23 @@ Os dois extremos ficam a uma edição de JSON de distância, que é o objetivo d
 Em `tests/`, seguindo o padrão existente. Sobre `_growth_mask`, com DataFrames construídos à mão — sem
 chamadas de rede:
 
-- Crescimento acima dos cortes com analistas suficientes → passa.
-- Crescimento de lucro negativo com analistas suficientes → reprova.
-- Crescimento NaN com `exigir_estimativa: false` → passa.
-- Crescimento NaN com `exigir_estimativa: true` → reprova.
-- Crescimento válido mas `num_analistas` abaixo do mínimo, com `exigir_num_analistas: true` → tratado
-  como NaN, seguindo `exigir_estimativa` (um caso para cada valor da flag).
-- `num_analistas` NaN com crescimento presente e `exigir_num_analistas: true` → tratado como NaN.
-- `exigir_num_analistas: false` com `num_analistas` abaixo do mínimo → `num_analistas_min` ignorado,
-  crescimento avaliado normalmente pelos cortes.
-- O caso permissivo documentado no desenho: `num_analistas` abaixo do mínimo, crescimento negativo,
-  `exigir_num_analistas: true` e `exigir_estimativa: false` → **passa**. Com
-  `exigir_num_analistas: false`, a mesma linha reprova.
+Com as duas flags ligadas:
+
+- Crescimento acima dos cortes e analistas suficientes → passa.
+- Crescimento de lucro negativo → reprova.
+- Crescimento de receita negativo, lucro positivo → reprova (as duas condições valem em conjunto).
+- Apenas uma das duas estimativas presente, outra NaN → reprova.
+- `num_analistas` exatamente igual a `num_analistas_min` → passa (comparação `>=`).
+- `num_analistas` abaixo do mínimo, crescimento bom → reprova.
+- `num_analistas` NaN → reprova.
+
+Com as flags desligadas, confirmando a independência entre elas:
+
+- `exigir_estimativa: false` e crescimento de lucro negativo → passa.
+- `exigir_num_analistas: false` e `num_analistas` NaN → passa.
+- `exigir_estimativa: false` com `exigir_num_analistas: true` → só a contagem de analistas decide.
+- `exigir_estimativa: true` com `exigir_num_analistas: false` → só os cortes de crescimento decidem.
+- Ambas `false` → máscara toda verdadeira, nenhuma linha reprovada.
 
 Para a extração em `fundamentals.py`, um teste com frame vazio e um com exceção, verificando que o
 resultado é NaN e a coleta não interrompe.
