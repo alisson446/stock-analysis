@@ -568,7 +568,8 @@ class TestAppendSnapshot:
         assert out.loc[0, 'data_snapshot'] == '2026-07-16'
         assert out.loc[0, 'metodo_valuation'] == 'dcf'
         for col in ('risk_free_rate', 'equity_risk_premium',
-                    'terminal_growth', 'use_forward_estimates'):
+                    'terminal_growth', 'use_forward_estimates',
+                    'forward_growth_driver'):
             assert col in out.columns
 
     def test_appends_without_duplicating_header(self, tmp_path):
@@ -609,6 +610,15 @@ class TestAppendSnapshot:
         p = tmp_path / 'hist.csv'
         v.append_snapshot(pd.DataFrame(), path=p)
         assert not p.exists()
+
+    def test_records_the_forward_growth_driver(self, monkeypatch, tmp_path):
+        # Sem isso, uma rodada com 'earnings' fica indistinguível de uma com
+        # 'revenue' no histórico — e o preço justo difere entre as duas.
+        monkeypatch.setattr(v, 'FORWARD_GROWTH_DRIVER', 'earnings')
+        p = tmp_path / 'hist.csv'
+        v.append_snapshot(self._valued(), path=p, snapshot_date='2026-08-06')
+        out = pd.read_csv(p)
+        assert out.loc[0, 'forward_growth_driver'] == 'earnings'
 
 
 class TestRsul4Regression:

@@ -647,6 +647,7 @@ def append_snapshot(df: pd.DataFrame, path: Path = None,
     snap['equity_risk_premium'] = EQUITY_RISK_PREMIUM
     snap['terminal_growth'] = TERMINAL_GROWTH
     snap['use_forward_estimates'] = USE_FORWARD_ESTIMATES
+    snap['forward_growth_driver'] = FORWARD_GROWTH_DRIVER
 
     path.parent.mkdir(parents=True, exist_ok=True)
     n_linhas = len(snap)

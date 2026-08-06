@@ -48,8 +48,8 @@ Constants in `src/valuation.py` — update these when economic conditions change
 | `SELIC` | 0.1425 | Discount rate / cost of equity |
 | `TERMINAL_GROWTH` | 0.035 | Long-term growth (Brazilian inflation target) |
 | `PROJECTION_YEARS` | 10 | DCF projection horizon (2-stage) |
-| `MAX_GROWTH_RATE` | 0.20 | Cap on FCF growth rate |
-| `MIN_GROWTH_RATE` | 0.0 | Floor on FCF growth rate |
+| `MAX_PROJECTABLE_GROWTH` | 0.20 | Threshold above which a growth rate is not projectable — returns `NaN` (no DCF), never replaces the rate |
+| `FORWARD_GROWTH_DRIVER` | `revenue` | Which forward growth feeds DCF stage 1: `revenue` or `earnings` (env) |
 | `MIN_SAFETY_MARGIN_PCT` | 20.0 | Threshold for "forte desconto" flag |
 
 ## Screening Criteria

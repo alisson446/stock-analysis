@@ -12,8 +12,8 @@ Update these when economic conditions change — never hardcode these values els
 | `SELIC` | 0.1425 | Discount rate / cost of equity |
 | `TERMINAL_GROWTH` | 0.035 | Long-term growth (Brazilian inflation target) |
 | `PROJECTION_YEARS` | 10 | DCF projection horizon |
-| `MAX_GROWTH_RATE` | 0.20 | Cap on FCF CAGR |
-| `MIN_GROWTH_RATE` | 0.0 | Floor on FCF CAGR |
+| `MAX_PROJECTABLE_GROWTH` | 0.20 | Threshold above which a growth rate is not projectable — returns `NaN` (no DCF), never replaces the rate |
+| `FORWARD_GROWTH_DRIVER` | `revenue` | Which forward growth feeds DCF stage 1: `revenue` or `earnings` (env) |
 | `MIN_SAFETY_MARGIN_PCT` | 20.0 | Threshold for `forte_desconto` flag |
 
 Always import constants from `src/valuation.py`. Never redefine `SELIC` or `TERMINAL_GROWTH` in other modules.
@@ -42,7 +42,7 @@ terminal_value = FCF_final × (1 + TERMINAL_GROWTH) / (SELIC - TERMINAL_GROWTH)
 
 **FCF CAGR rules:**
 - Only use positive FCF data points to compute CAGR
-- Cap between `MIN_GROWTH_RATE` and `MAX_GROWTH_RATE`
+- Above `MAX_PROJECTABLE_GROWTH` → `NaN` (not projectable; caller falls back to DDM). Negative CAGR passes through unchanged — there is no floor.
 - Fewer than 2 data points → CAGR = 0.0
 
 **Output column:** `preco_justo_dcf`
