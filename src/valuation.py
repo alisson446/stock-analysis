@@ -43,7 +43,7 @@ RISK_FREE_RATE = _env_float('RISK_FREE_RATE', 0.124)     # Título longo do gove
 EQUITY_RISK_PREMIUM = _env_float('EQUITY_RISK_PREMIUM', 0.075)  # Prêmio de risco BR (S&P Global, via SWS)
 TERMINAL_GROWTH = RISK_FREE_RATE  # Perpetuidade não pode exceder a economia
 # Liga o uso de estimativas forward de crescimento (analistas via yfinance) no
-# estágio 1 do DCF. Desligado por padrão -> comportamento = CAGR histórico.
+# estágio 1 do DCF. Desligado por padrão -> comportamento = crescimento histórico.
 USE_FORWARD_ESTIMATES = _env_bool('USE_FORWARD_ESTIMATES', False)
 # Qual crescimento alimenta o estágio 1 do DCF: 'revenue' (receita, default) ou
 # 'earnings' (lucro). Receita é o default por razão estrutural, não amostral: o
@@ -281,8 +281,8 @@ def resolve_forward_growth(row) -> float:
     Crescimento <= -100% é tratado como dado AUSENTE, não como valor extremo: só
     acontece com o driver de lucro, quando o lucro vira prejuízo e o denominador
     da razão (estimativa - realizado)/|realizado| cruza zero — a partir daí o
-    número não significa mais uma taxa. Recai no CAGR histórico como qualquer
-    estimativa faltante.
+    número não significa mais uma taxa. Recai no crescimento histórico como
+    qualquer estimativa faltante.
 
     Não decide projetabilidade: essa avaliação fica concentrada em
     `dcf_valuation`, com o limiar MAX_PROJECTABLE_GROWTH.
@@ -311,11 +311,12 @@ def dcf_valuation(ticker_sa: str, shares_total: float = None,
     ao longo de PROJECTION_YEARS anos.
     Estágio 2: perpetuidade de Gordon a TERMINAL_GROWTH.
 
-    Crescimento inicial: por padrão é o CAGR histórico do FCF. Com
-    USE_FORWARD_ESTIMATES ligado, usa a estimativa forward passada pelo chamador
-    quando ela existe e é projetável (<= MAX_PROJECTABLE_GROWTH), caindo de volta
-    no CAGR histórico caso contrário. Se nem uma nem outra for projetável, sai
-    sem preço e o chamador recai no DDM.
+    Crescimento inicial: por padrão é o crescimento histórico do FCF (tendência
+    log-linear). Com USE_FORWARD_ESTIMATES ligado, usa a estimativa forward
+    passada pelo chamador quando ela existe e é projetável (<=
+    MAX_PROJECTABLE_GROWTH), caindo de volta no crescimento histórico caso
+    contrário. Se nem uma nem outra for projetável, sai sem preço e o chamador
+    recai no DDM.
 
     O 'Free Cash Flow' do yfinance é OCF − CapEx, com o OCF já líquido de juros
     pagos: é FCFE. O valor presente já é o equity value, sem ajuste de dívida.
@@ -362,9 +363,10 @@ def dcf_valuation(ticker_sa: str, shares_total: float = None,
 
         coe = cost_of_equity(beta)
 
-        # Crescimento inicial: CAGR histórico (pode ser NaN), substituído pela
-        # estimativa forward quando ela está ligada, existe e é projetável.
-        # Forward acima do limiar NÃO é capado: recua para o histórico.
+        # Crescimento inicial: crescimento histórico do FCF (pode ser NaN),
+        # substituído pela estimativa forward quando ela está ligada, existe e
+        # é projetável. Forward acima do limiar NÃO é capado: recua para o
+        # histórico.
         initial_growth = _compute_fcf_growth(fcf_series)
         growth_source = 'historical'
         if (USE_FORWARD_ESTIMATES

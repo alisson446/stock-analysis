@@ -13,6 +13,7 @@ Update these when economic conditions change — never hardcode these values els
 | `TERMINAL_GROWTH` | 0.035 | Long-term growth (Brazilian inflation target) |
 | `PROJECTION_YEARS` | 10 | DCF projection horizon |
 | `MAX_PROJECTABLE_GROWTH` | 0.20 | Threshold above which a growth rate is not projectable — returns `NaN` (no DCF), never replaces the rate |
+| `MIN_TREND_R2` | 0.5 | Minimum share of the series' variation the trend line must explain — below it there is no trend to project, so `_compute_fcf_growth` returns `NaN` (no DCF) |
 | `FORWARD_GROWTH_DRIVER` | `revenue` | Which forward growth feeds DCF stage 1: `revenue` or `earnings` (env) |
 | `MIN_SAFETY_MARGIN_PCT` | 20.0 | Threshold for `forte_desconto` flag |
 
@@ -28,11 +29,11 @@ Always import constants from `src/valuation.py`. Never redefine `SELIC` or `TERM
 ## DCF 2-Stage (Non-bank stocks)
 
 **Requirements before computing DCF:**
-- FCF base (most recent) must be **positive** — negative FCF → use DDM fallback
+- FCF base is the **median** of the historical series (not the most recent year, which anchors on the cycle peak) and must be **positive** — otherwise use DDM fallback
 - `shares_outstanding` must be > 0
 
 **Stage 1 — Linear decay:**
-- Growth rate decays linearly from historical FCF CAGR → `TERMINAL_GROWTH` over `PROJECTION_YEARS` years
+- Growth rate decays linearly from the historical FCF trend → `TERMINAL_GROWTH` over `PROJECTION_YEARS` years
 - Year 1 uses `initial_growth`; Year `PROJECTION_YEARS` uses `TERMINAL_GROWTH`
 
 **Stage 2 — Terminal value (Gordon Growth Model):**
@@ -40,10 +41,14 @@ Always import constants from `src/valuation.py`. Never redefine `SELIC` or `TERM
 terminal_value = FCF_final × (1 + TERMINAL_GROWTH) / (SELIC - TERMINAL_GROWTH)
 ```
 
-**FCF CAGR rules:**
-- Only use positive FCF data points to compute CAGR
-- Above `MAX_PROJECTABLE_GROWTH` → `NaN` (not projectable; caller falls back to DDM). Negative CAGR passes through unchanged — there is no floor.
-- Fewer than 2 data points → CAGR = 0.0
+**Historical FCF growth rules (`_compute_fcf_growth`):**
+- Fit a line over `log(FCF)` across **all** points; the growth rate is `exp(slope) - 1`. Never compare only the first and last point.
+- Any data point ≤ 0 → `NaN`. There is no logarithm of a negative number, and a series that passes through a loss does not describe compound growth.
+- R² below `MIN_TREND_R2` → `NaN`. The series has no trend to project (a cyclical series and a consistent decline can share the same average slope).
+- Constant series → `NaN` (R² would be a division by zero). A very stable company is rejected on purpose; it errs by excluding.
+- Above `MAX_PROJECTABLE_GROWTH` → `NaN` (not projectable; caller falls back to DDM). Negative growth passes through unchanged — there is no floor.
+- Fewer than 2 data points → `NaN`.
+- **`0.0` is never returned.** Zeroing is not conservative: stage 1 raises the rate from 0 up to `TERMINAL_GROWTH`, so it inflates the fair price.
 
 **Output column:** `preco_justo_dcf`
 

@@ -27,7 +27,7 @@ src/
 ## Valuation Models (inspired by Simply Wall St)
 
 ### Non-bank stocks: 2-Stage DCF + DDM fallback + Graham
-- **DCF 2-Stage:** Growth rate decays linearly from historical CAGR → `TERMINAL_GROWTH` over `PROJECTION_YEARS` (10). Terminal value via Gordon Growth Model.
+- **DCF 2-Stage:** Growth rate decays linearly from the historical FCF trend → `TERMINAL_GROWTH` over `PROJECTION_YEARS` (10). Terminal value via Gordon Growth Model.
 - **DDM Fallback:** When FCF data is unavailable, uses `dividend_rate / (SELIC - TERMINAL_GROWTH)` (Gordon Growth on dividends).
 - **Graham:** `V = √(sector_avg_PE × sector_avg_PB × LPA × VPA)`
 
@@ -49,6 +49,7 @@ Constants in `src/valuation.py` — update these when economic conditions change
 | `TERMINAL_GROWTH` | 0.035 | Long-term growth (Brazilian inflation target) |
 | `PROJECTION_YEARS` | 10 | DCF projection horizon (2-stage) |
 | `MAX_PROJECTABLE_GROWTH` | 0.20 | Threshold above which a growth rate is not projectable — returns `NaN` (no DCF), never replaces the rate |
+| `MIN_TREND_R2` | 0.5 | Minimum share of the series' variation the trend line must explain — below it there is no trend to project, so `_compute_fcf_growth` returns `NaN` (no DCF) |
 | `FORWARD_GROWTH_DRIVER` | `revenue` | Which forward growth feeds DCF stage 1: `revenue` or `earnings` (env) |
 | `MIN_SAFETY_MARGIN_PCT` | 20.0 | Threshold for "forte desconto" flag |
 
