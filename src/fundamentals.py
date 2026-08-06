@@ -93,6 +93,61 @@ def compute_ttm_net_income(info: dict, quarterly_income) -> float:
     return np.nan
 
 
+# Período das estimativas de analistas. A Yahoo só entrega '0q', '+1q', '0y'
+# e '+1y' — o '+1y' (próximo exercício) é o horizonte mais longo disponível.
+# A linha 'LTG' existe no schema mas vem NaN para a ação em todos os tickers
+# testados, BR e US.
+_ESTIMATE_PERIOD = '+1y'
+
+
+def _estimate_cell(frame, column: str) -> float:
+    """
+    Lê uma célula da linha '+1y' de um frame de estimativas do yfinance.
+
+    Defensiva por design: layout e cobertura variam entre tickers e versões
+    do yfinance, e uma exceção aqui interromperia a coleta dos 372 tickers.
+    """
+    try:
+        if frame is None or frame.empty or _ESTIMATE_PERIOD not in frame.index:
+            return np.nan
+        value = frame.loc[_ESTIMATE_PERIOD, column]
+        return float(value) if pd.notna(value) else np.nan
+    except Exception:
+        return np.nan
+
+
+def _extract_growth_estimates(stock) -> tuple[float, float, float]:
+    """
+    Crescimento projetado por analistas para o próximo exercício.
+
+    Usa `revenue_estimate` e `earnings_estimate`, que saem do mesmo módulo
+    `earningsTrend` do quoteSummary e ficam em cache no objeto Ticker: acessar
+    as duas custa 1 requisição HTTP. Não usar `growth_estimates`, que dispara
+    uma segunda requisição para buscar dados de índice que não consumimos.
+
+    O número de analistas vem do `earnings_estimate` — o `revenue_estimate` não
+    expõe contagem — e governa as duas métricas de crescimento.
+
+    Args:
+        stock: objeto `yf.Ticker` já construído.
+
+    Returns:
+        (crescimento_receita_pct, crescimento_lucro_pct, num_analistas), em
+        pontos percentuais. Qualquer campo indisponível vem como NaN.
+    """
+    try:
+        revenue = stock.revenue_estimate
+        earnings = stock.earnings_estimate
+    except Exception:
+        return np.nan, np.nan, np.nan
+
+    return (
+        _estimate_cell(revenue, 'growth') * 100,
+        _estimate_cell(earnings, 'growth') * 100,
+        _estimate_cell(earnings, 'numberOfAnalysts'),
+    )
+
+
 def fetch_betas(tickers_sa: list[str], index_symbol: str = '^BVSP',
                 period: str = '5y') -> pd.Series:
     """

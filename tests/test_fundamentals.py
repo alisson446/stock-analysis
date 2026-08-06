@@ -122,3 +122,121 @@ class TestComputeTTMNetIncome:
         qi = _quarterly({'Net Income': [5, 5, 5, 5, 5]})
         assert f.compute_ttm_net_income(
             {'netIncomeToCommon': 0}, qi) == pytest.approx(20)
+
+
+class _FakeEstimateTicker:
+    """Stub de yf.Ticker cujos frames de estimativa são controlados no teste."""
+
+    def __init__(self, revenue=None, earnings=None, raises=False):
+        self._revenue = revenue
+        self._earnings = earnings
+        self._raises = raises
+
+    @property
+    def revenue_estimate(self):
+        if self._raises:
+            raise RuntimeError('falha de rede')
+        return self._revenue
+
+    @property
+    def earnings_estimate(self):
+        if self._raises:
+            raise RuntimeError('falha de rede')
+        return self._earnings
+
+
+def _revenue_frame(rows):
+    """rows: {periodo: growth_decimal}"""
+    return pd.DataFrame(
+        {'growth': list(rows.values())},
+        index=list(rows.keys()),
+    )
+
+
+def _earnings_frame(rows):
+    """rows: {periodo: (growth_decimal, num_analistas)}"""
+    return pd.DataFrame(
+        {
+            'growth': [v[0] for v in rows.values()],
+            'numberOfAnalysts': [v[1] for v in rows.values()],
+        },
+        index=list(rows.keys()),
+    )
+
+
+class TestExtractGrowthEstimates:
+
+    def test_reads_next_year_and_converts_to_percentage_points(self):
+        stock = _FakeEstimateTicker(
+            revenue=_revenue_frame({'0y': 0.0256, '+1y': 0.1693}),
+            earnings=_earnings_frame({'0y': (0.0084, 11), '+1y': (0.2057, 11)}),
+        )
+
+        receita, lucro, analistas = f._extract_growth_estimates(stock)
+
+        assert receita == pytest.approx(16.93)
+        assert lucro == pytest.approx(20.57)
+        assert analistas == 11
+
+    def test_ignores_current_year_and_quarterly_periods(self):
+        stock = _FakeEstimateTicker(
+            revenue=_revenue_frame({'0q': 0.9, '+1q': 0.8, '0y': 0.7, '+1y': 0.05}),
+            earnings=_earnings_frame({'0q': (0.9, 6), '+1y': (0.10, 4)}),
+        )
+
+        receita, lucro, analistas = f._extract_growth_estimates(stock)
+
+        assert receita == pytest.approx(5.0)
+        assert lucro == pytest.approx(10.0)
+        assert analistas == 4
+
+    def test_returns_nan_when_next_year_row_missing(self):
+        stock = _FakeEstimateTicker(
+            revenue=_revenue_frame({'0y': 0.05}),
+            earnings=_earnings_frame({'0y': (0.05, 3)}),
+        )
+
+        receita, lucro, analistas = f._extract_growth_estimates(stock)
+
+        assert np.isnan(receita)
+        assert np.isnan(lucro)
+        assert np.isnan(analistas)
+
+    def test_returns_nan_for_empty_frames(self):
+        stock = _FakeEstimateTicker(
+            revenue=pd.DataFrame(),
+            earnings=pd.DataFrame(),
+        )
+
+        assert all(np.isnan(v) for v in f._extract_growth_estimates(stock))
+
+    def test_returns_nan_when_frames_are_none(self):
+        stock = _FakeEstimateTicker(revenue=None, earnings=None)
+
+        assert all(np.isnan(v) for v in f._extract_growth_estimates(stock))
+
+    def test_returns_nan_on_exception(self):
+        stock = _FakeEstimateTicker(raises=True)
+
+        assert all(np.isnan(v) for v in f._extract_growth_estimates(stock))
+
+    def test_returns_nan_for_nan_cell(self):
+        stock = _FakeEstimateTicker(
+            revenue=_revenue_frame({'+1y': np.nan}),
+            earnings=_earnings_frame({'+1y': (np.nan, np.nan)}),
+        )
+
+        assert all(np.isnan(v) for v in f._extract_growth_estimates(stock))
+
+    def test_revenue_available_without_earnings(self):
+        """Caso real: CYRE4 e IGTI3 têm receita mas não lucro."""
+        stock = _FakeEstimateTicker(
+            revenue=_revenue_frame({'+1y': 0.1594}),
+            earnings=pd.DataFrame(),
+        )
+
+        receita, lucro, analistas = f._extract_growth_estimates(stock)
+
+        assert receita == pytest.approx(15.94)
+        assert np.isnan(lucro)
+        assert np.isnan(analistas)
