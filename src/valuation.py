@@ -181,10 +181,12 @@ def _compute_fcf_growth(fcf_series: pd.Series) -> float:
     devolve NaN: o DCF se declara inaplicável, o chamador recai no DDM e
     metodo_valuation registra a troca. A taxa nunca é substituída por outra.
 
-    Uma empresa muito estável é rejeitada de propósito: quase toda a variação
-    dela é ruído -- porque quase não há variação -- e o R² fica baixo. É um erro
-    conhecido, e ele erra na direção barata: tira a ação da lista em vez de
-    fazê-la parecer barata.
+    R² não enxerga tamanho, só formato: uma série que sobe suavemente 0,5% ao
+    ano tem R² = 1,00 e passa, por menor que seja o crescimento. Quem é
+    rejeitada é a série ERRÁTICA -- que sobe e desce sem padrão --, mesmo que
+    quase estável, como 100 -> 101 -> 100 -> 101. É um erro conhecido, e ele
+    erra na direção barata: tira a ação da lista em vez de fazê-la parecer
+    barata.
 
     Devolve NaN (não modelável) ou uma taxa que pode ser negativa. Nunca 0,0:
     zerar seria substituir o número por outro e, pior, não é conservador --
@@ -207,8 +209,8 @@ def _compute_fcf_growth(fcf_series: pd.Series) -> float:
     years = np.arange(len(values))
 
     # Série constante: o R² seria uma divisão por zero (numpy devolveria NaN
-    # com RuntimeWarning). Mesmo destino da empresa muito estável descrito na
-    # docstring -- não modelável por DCF.
+    # com RuntimeWarning) -- não há variação nenhuma para a reta explicar.
+    # Não modelável por DCF.
     if np.ptp(log_values) == 0:
         return np.nan
 

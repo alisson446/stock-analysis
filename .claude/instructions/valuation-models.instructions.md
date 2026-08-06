@@ -42,10 +42,10 @@ terminal_value = FCF_final × (1 + TERMINAL_GROWTH) / (SELIC - TERMINAL_GROWTH)
 ```
 
 **Historical FCF growth rules (`_compute_fcf_growth`):**
-- Fit a line over `log(FCF)` across **all** points; the growth rate is `exp(slope) - 1`. Never compare only the first and last point.
+- Fit a line over `log(FCF)` across **all** points; the growth rate is `exp(slope) - 1`. Never compare only the first and last point — except with exactly 2 data points, where a line through two points is unavoidable and the regression degenerates into that same first-and-last comparison (R² = 1 always, so the gate below is vacuous).
 - Any data point ≤ 0 → `NaN`. There is no logarithm of a negative number, and a series that passes through a loss does not describe compound growth.
 - R² below `MIN_TREND_R2` → `NaN`. The series has no trend to project (a cyclical series and a consistent decline can share the same average slope).
-- Constant series → `NaN` (R² would be a division by zero). A very stable company is rejected on purpose; it errs by excluding.
+- Constant series → `NaN` (R² would be a division by zero). R² is scale-free, so a smoothly stable company still passes (R² = 1.00 even at +0.5%/year) — only an erratic series is rejected on purpose, regardless of how small its swings are; it errs by excluding.
 - Above `MAX_PROJECTABLE_GROWTH` → `NaN` (not projectable; caller falls back to DDM). Negative growth passes through unchanged — there is no floor.
 - Fewer than 2 data points → `NaN`.
 - **`0.0` is never returned.** Zeroing is not conservative: stage 1 raises the rate from 0 up to `TERMINAL_GROWTH`, so it inflates the fair price.
@@ -54,7 +54,7 @@ terminal_value = FCF_final × (1 + TERMINAL_GROWTH) / (SELIC - TERMINAL_GROWTH)
 
 ## DDM Fallback (Non-bank stocks, FCF unavailable)
 
-Only use DDM when FCF data is unavailable or negative. Formula (Gordon Growth on dividends):
+Only use DDM when FCF data is unavailable, negative, or has no projectable trend (`_compute_fcf_growth` returns `NaN`). Formula (Gordon Growth on dividends):
 
 ```
 preco_justo_ddm = dividend_rate / (SELIC - TERMINAL_GROWTH)

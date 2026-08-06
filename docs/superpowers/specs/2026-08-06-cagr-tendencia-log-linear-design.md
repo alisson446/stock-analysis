@@ -89,10 +89,13 @@ variação da série; abaixo disso o que a série tem é mais ruído do que traj
 0,6 só seria justificável olhando quais ações passam, que é exatamente o que a Guideline 3
 proíbe.
 
-**Defeito declarado:** o R² penaliza a série chata. Uma empresa com FCF 100 → 101 → 100 →
-101 tem crescimento praticamente nulo e é a coisa mais previsível possível, mas quase toda
-a sua variação é ruído — porque quase não há variação — e o R² fica baixo. Ela vai pro
-DDM.
+**Defeito declarado:** o R² penaliza a série que oscila sem direção, mesmo quando a
+oscilação é minúscula. Uma empresa com FCF 100 → 101 → 100 → 101 tem crescimento
+praticamente nulo, mas sobe e desce sem consistência — o R² não enxerga o tamanho do
+movimento, só a falta de padrão nele — e fica baixo (R² = 0,20, medido). Ela vai pro DDM.
+Repare que o defeito é mais estreito do que "série estável": uma série igualmente pequena
+mas consistente, como 100 → 100,5 → 101 → 101,5, tem R² = 1,00 e passa — quem paga o preço
+aqui é a empresa errática de baixo crescimento, não toda empresa estável.
 
 A alternativa seria um segundo limiar que liberasse séries de dispersão absoluta pequena,
 mas "pequena" quanto é um número que só se escolhe olhando os dados (Guideline 3). Aceita-se
@@ -227,6 +230,12 @@ marca `metodo_valuation` como `ddm` ou `none` em vez de emitir um preço justo d
   pontos em vez de dois.
 - **Uma empresa estável pode ser rejeitada** pelo R², como descrito na decisão 4. Erro
   conhecido, na direção barata.
+- **A mudança também pode admitir uma ação que o cálculo antigo rejeitava.** Série
+  100 → 180 → 175 → 178: pelas pontas dá +21,2% a.a., acima de `MAX_PROJECTABLE_GROWTH`
+  (`NaN` → DDM); pela tendência dá +18,6% com R² = 0,585, então o DCF é emitido. Não é uma
+  violação da Guideline 4 — a tendência é o resumo mais fiel da série inteira, e
+  `MAX_PROJECTABLE_GROWTH` continua barrando taxas que não se sustentam por 10 anos — mas a
+  mudança não é só de aperto: ela também pode destravar ações que a regra antiga descartava.
 
 ## Fora de escopo
 

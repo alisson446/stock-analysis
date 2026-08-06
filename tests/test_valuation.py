@@ -107,6 +107,20 @@ class TestComputeFcfGrowth:
         serie = pd.Series([50.0, 100.0])
         assert v._compute_fcf_growth(serie) == pytest.approx(-0.50, abs=1e-9)
 
+    def test_rejects_series_just_below_the_r2_threshold(self):
+        # 100 -> 163 -> 130 -> 160. R² = 0,4498 (medido), logo abaixo de
+        # MIN_TREND_R2 = 0,5. Série sintética construída para fixar o limiar
+        # por baixo -- nenhum dado real foi calibrado para isso.
+        serie = pd.Series([160.0, 130.0, 163.0, 100.0])
+        assert np.isnan(v._compute_fcf_growth(serie))
+
+    def test_accepts_series_just_above_the_r2_threshold(self):
+        # 100 -> 154 -> 130 -> 160. R² = 0,5602 (medido), logo acima de
+        # MIN_TREND_R2 = 0,5. Série sintética construída para fixar o limiar
+        # por cima -- nenhum dado real foi calibrado para isso.
+        serie = pd.Series([160.0, 130.0, 154.0, 100.0])
+        assert v._compute_fcf_growth(serie) == pytest.approx(0.1321, abs=1e-3)
+
 
 class TestFcfBase:
     """Base do DCF passa a ser a mediana, para não ancorar em ano de pico."""
