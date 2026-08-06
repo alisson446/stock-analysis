@@ -3,7 +3,7 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from src.fundamentals import get_fcf_series, resolve_share_count, get_forward_growth
+from src.fundamentals import get_fcf_series, resolve_share_count
 
 # Carrega variáveis de um .env se python-dotenv estiver instalado. O .env é
 # gitignored e guarda os dados que mudam com o tempo e que o yfinance NÃO
@@ -57,8 +57,15 @@ if FORWARD_GROWTH_DRIVER not in ('revenue', 'earnings'):
           f"usando 'revenue'")
     FORWARD_GROWTH_DRIVER = 'revenue'
 PROJECTION_YEARS = 10      # Horizonte de projeção (2 estágios: decay linear)
-MAX_GROWTH_RATE = 0.20     # Cap de crescimento anual
-MIN_GROWTH_RATE = 0.0      # Floor de crescimento
+# Limiar de PROJETABILIDADE, não teto de crescimento: responde "consigo projetar
+# essa taxa por 10 anos?". Quando a resposta é não, o modelo recua para outra
+# fonte ou se declara inaplicável (NaN) — nunca troca a taxa por 0,20. Substituir
+# silenciosamente produz um preço justo que aparenta ter modelado a empresa
+# quando modelou outra, mais saudável, e isso chega ao usuário como recomendação.
+# Não existe piso: crescimento negativo é projetado como negativo. Um piso
+# seleciona por MAGNITUDE, e magnitude não indica falta de confiabilidade — uma
+# empresa que cai todo ano por quatro anos produz um número grande e confiável.
+MAX_PROJECTABLE_GROWTH = 0.20
 MIN_BETA = 0.5             # Clamp de beta (regressões de small caps produzem outliers)
 MAX_BETA = 2.5
 MIN_BETA_OBSERVATIONS = 30  # Mínimo de semanas para uma regressão de beta confiável
@@ -151,6 +158,9 @@ def _compute_fcf_cagr(fcf_series: pd.Series) -> float:
     não sustenta extrapolação de crescimento composto. A versão anterior pulava
     os negativos e media apenas entre os pontos positivos, o que transformava a
     série cíclica da RSUL4 (21,2M → -9,8M → 41,8M) em "25% a.a.".
+
+    Não há piso: um CAGR negativo atravessa e a projeção começa em queda. E o
+    limiar de cima não substitui o valor — devolve NaN, ou seja "não projetável".
     """
     if len(fcf_series) < 2:
         return 0.0
@@ -166,8 +176,13 @@ def _compute_fcf_cagr(fcf_series: pd.Series) -> float:
 
     cagr = (last / first) ** (1 / n_years) - 1
 
-    # Aplicar limites
-    return max(MIN_GROWTH_RATE, min(MAX_GROWTH_RATE, cagr))
+    # Acima do limiar não é "20%": é uma taxa que não se projeta por 10 anos.
+    # Devolver NaN faz o DCF se declarar inaplicável em vez de emitir o maior
+    # preço justo possível. Abaixo de zero passa direto: declínio é dado válido.
+    if cagr > MAX_PROJECTABLE_GROWTH:
+        return np.nan
+
+    return cagr
 
 
 def discount_fcf_to_equity(fcf_base: float, growth: float, discount_rate: float,
@@ -255,8 +270,10 @@ def dcf_valuation(ticker_sa: str, shares_total: float = None,
     Estágio 2: perpetuidade de Gordon a TERMINAL_GROWTH.
 
     Crescimento inicial: por padrão é o CAGR histórico do FCF. Com
-    USE_FORWARD_ESTIMATES ligado, usa a estimativa forward de analistas
-    (yfinance) quando disponível, caindo de volta no CAGR histórico se não for.
+    USE_FORWARD_ESTIMATES ligado, usa a estimativa forward passada pelo chamador
+    quando ela existe e é projetável (<= MAX_PROJECTABLE_GROWTH), caindo de volta
+    no CAGR histórico caso contrário. Se nem uma nem outra for projetável, sai
+    sem preço e o chamador recai no DDM.
 
     O 'Free Cash Flow' do yfinance é OCF − CapEx, com o OCF já líquido de juros
     pagos: é FCFE. O valor presente já é o equity value, sem ajuste de dívida.
@@ -265,8 +282,9 @@ def dcf_valuation(ticker_sa: str, shares_total: float = None,
         ticker_sa: Ticker com sufixo .SA
         shares_total: Total de ações (ON + PN). Se None, resolve via yfinance.
         beta: Beta da ação. Se None, busca do yfinance (fallback 1,0).
-        forward_growth: Crescimento forward já resolvido (decimal). Se None e
-            USE_FORWARD_ESTIMATES estiver ligado, busca via get_forward_growth.
+        forward_growth: Crescimento forward já resolvido em decimal, tipicamente
+            de resolve_forward_growth(row). Nunca é buscado aqui dentro: o dado
+            já está no CSV de fundamentos.
 
     Returns:
         dict com 'preco_justo_dcf', 'growth_rate', 'fcf_base', 'cost_of_equity',
@@ -302,18 +320,23 @@ def dcf_valuation(ticker_sa: str, shares_total: float = None,
 
         coe = cost_of_equity(beta)
 
-        # Crescimento inicial: forward (analistas) se ligado e disponível,
-        # senão CAGR histórico.
+        # Crescimento inicial: CAGR histórico (pode ser NaN), substituído pela
+        # estimativa forward quando ela está ligada, existe e é projetável.
+        # Forward acima do limiar NÃO é capado: recua para o histórico.
         initial_growth = _compute_fcf_cagr(fcf_series)
         growth_source = 'historical'
-        if USE_FORWARD_ESTIMATES:
-            if forward_growth is None:
-                forward_growth = get_forward_growth(ticker_sa)
-            if forward_growth is not None and pd.notna(forward_growth):
-                initial_growth = max(
-                    MIN_GROWTH_RATE, min(MAX_GROWTH_RATE, float(forward_growth))
-                )
-                growth_source = 'forward'
+        if (USE_FORWARD_ESTIMATES
+                and forward_growth is not None and pd.notna(forward_growth)
+                and float(forward_growth) <= MAX_PROJECTABLE_GROWTH):
+            initial_growth = float(forward_growth)
+            growth_source = 'forward'
+
+        # Nenhuma taxa projetável (histórico acima do limiar e sem forward
+        # utilizável): sai sem preço. O chamador recai no DDM e a coluna
+        # metodo_valuation registra a substituição, em vez de o número aparecer
+        # como se tivesse saído de um DCF.
+        if pd.isna(initial_growth):
+            return result
 
         result['preco_justo_dcf'] = discount_fcf_to_equity(
             fcf_base=fcf_base,

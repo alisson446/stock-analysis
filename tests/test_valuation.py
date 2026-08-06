@@ -54,13 +54,23 @@ class TestComputeFcfCagr:
         serie = pd.Series([121.0, 110.0, 100.0])
         assert v._compute_fcf_cagr(serie) == pytest.approx(0.10, abs=1e-6)
 
-    def test_caps_growth_at_max_rate(self):
+    def test_returns_nan_when_cagr_is_above_projectable_threshold(self):
+        # 100 -> 1000 em 1 ano = +900%. Antes virava seed de 20%, o que produz
+        # o MAIOR preço justo que o modelo consegue emitir; agora o DCF se
+        # declara inaplicável e o chamador recai no DDM, rotulado.
         serie = pd.Series([1000.0, 100.0])
-        assert v._compute_fcf_cagr(serie) == v.MAX_GROWTH_RATE
+        assert np.isnan(v._compute_fcf_cagr(serie))
 
-    def test_floors_growth_at_min_rate_when_declining(self):
+    def test_lets_negative_cagr_through_unchanged(self):
+        # 100 -> 50 em 1 ano = -50%. Sem piso: declínio é projetado como
+        # declínio, e isso só reduz o preço justo (erra excluindo).
         serie = pd.Series([50.0, 100.0])
-        assert v._compute_fcf_cagr(serie) == v.MIN_GROWTH_RATE
+        assert v._compute_fcf_cagr(serie) == pytest.approx(-0.50, abs=1e-9)
+
+    def test_accepts_cagr_exactly_at_the_threshold(self):
+        # 100 -> 120 em 1 ano = +20%: no limiar, ainda projetável.
+        serie = pd.Series([120.0, 100.0])
+        assert v._compute_fcf_cagr(serie) == pytest.approx(v.MAX_PROJECTABLE_GROWTH, abs=1e-9)
 
     def test_returns_zero_for_single_year(self):
         assert v._compute_fcf_cagr(pd.Series([100.0])) == 0.0
@@ -157,6 +167,21 @@ class TestDiscountFcfToEquity:
         low = v.discount_fcf_to_equity(10e6, 0.0, 0.18, 1e6)
         high = v.discount_fcf_to_equity(10e6, 0.0, 0.25, 1e6)
         assert high < low
+
+    def test_negative_growth_yields_a_positive_finite_price(self):
+        # Sem piso, o estágio 1 pode começar em queda: o fluxo encolhe nos
+        # primeiros anos e converge para o crescimento terminal. O resultado
+        # precisa continuar sendo um número, só menor.
+        got = v.discount_fcf_to_equity(10e6, -0.10, 0.20, 1e6)
+        assert got > 0 and np.isfinite(got)
+        assert got < v.discount_fcf_to_equity(10e6, 0.0, 0.20, 1e6)
+
+    def test_returns_nan_at_minus_one_hundred_percent_growth(self):
+        # -100% zera o fluxo do primeiro ano: não há empresa a avaliar.
+        assert np.isnan(v.discount_fcf_to_equity(10e6, -1.0, 0.20, 1e6))
+
+    def test_returns_nan_below_minus_one_hundred_percent_growth(self):
+        assert np.isnan(v.discount_fcf_to_equity(10e6, -1.5, 0.20, 1e6))
 
 
 class TestComputeBeta:
@@ -371,43 +396,69 @@ class TestResolveForwardGrowth:
 
 class TestForwardGrowth:
     """
-    Com USE_FORWARD_ESTIMATES ligado, o estágio 1 usa o crescimento de analistas
-    (yfinance); senão, o CAGR histórico. Sem estimativa forward, cai de volta no
-    histórico. get_fcf_series/get_forward_growth são mockados para não bater rede.
+    Com USE_FORWARD_ESTIMATES ligado, o estágio 1 usa o crescimento forward que
+    o chamador passa (vindo de resolve_forward_growth); senão, o CAGR histórico.
+    O forward não é mais buscado dentro do DCF — o valor já vem do CSV.
+
+    O limiar de projetabilidade NÃO substitui a taxa: forward acima dele é
+    descartado em favor do histórico.
     """
 
     FCF = pd.Series([121e6, 110e6, 100e6])  # CAGR histórico = 10%
 
     def test_uses_forward_growth_when_enabled(self, monkeypatch):
         monkeypatch.setattr(v, 'get_fcf_series', lambda t: self.FCF)
-        monkeypatch.setattr(v, 'get_forward_growth', lambda t: 0.05)
         monkeypatch.setattr(v, 'USE_FORWARD_ESTIMATES', True)
-        res = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0)
+        res = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0, forward_growth=0.05)
         assert res['growth_source'] == 'forward'
         assert res['growth_rate'] == pytest.approx(0.05)
 
     def test_ignores_forward_when_disabled(self, monkeypatch):
         monkeypatch.setattr(v, 'get_fcf_series', lambda t: self.FCF)
-        monkeypatch.setattr(v, 'get_forward_growth', lambda t: 0.05)
         monkeypatch.setattr(v, 'USE_FORWARD_ESTIMATES', False)
-        res = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0)
+        res = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0, forward_growth=0.05)
         assert res['growth_source'] == 'historical'
         assert res['growth_rate'] == pytest.approx(0.10, abs=1e-6)
 
     def test_falls_back_to_historical_when_forward_nan(self, monkeypatch):
         monkeypatch.setattr(v, 'get_fcf_series', lambda t: self.FCF)
-        monkeypatch.setattr(v, 'get_forward_growth', lambda t: float('nan'))
         monkeypatch.setattr(v, 'USE_FORWARD_ESTIMATES', True)
-        res = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0)
+        res = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0,
+                              forward_growth=float('nan'))
         assert res['growth_source'] == 'historical'
         assert res['growth_rate'] == pytest.approx(0.10, abs=1e-6)
 
-    def test_forward_growth_is_capped_at_max(self, monkeypatch):
+    def test_falls_back_to_historical_when_forward_is_not_projectable(self, monkeypatch):
+        # ONCO3 com lucro +1410%: antes virava seed de 20% (preço justo máximo).
         monkeypatch.setattr(v, 'get_fcf_series', lambda t: self.FCF)
-        monkeypatch.setattr(v, 'get_forward_growth', lambda t: 0.90)
         monkeypatch.setattr(v, 'USE_FORWARD_ESTIMATES', True)
+        res = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0, forward_growth=14.107)
+        assert res['growth_source'] == 'historical'
+        assert res['growth_rate'] == pytest.approx(0.10, abs=1e-6)
+
+    def test_uses_negative_forward_growth_as_is(self, monkeypatch):
+        monkeypatch.setattr(v, 'get_fcf_series', lambda t: self.FCF)
+        monkeypatch.setattr(v, 'USE_FORWARD_ESTIMATES', True)
+        res = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0, forward_growth=-0.10)
+        assert res['growth_source'] == 'forward'
+        assert res['growth_rate'] == pytest.approx(-0.10)
+
+    def test_negative_growth_yields_lower_price_than_zero_growth(self, monkeypatch):
+        monkeypatch.setattr(v, 'get_fcf_series', lambda t: self.FCF)
+        monkeypatch.setattr(v, 'USE_FORWARD_ESTIMATES', True)
+        declining = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0,
+                                    forward_growth=-0.10)
+        flat = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0, forward_growth=0.0)
+        assert declining['preco_justo_dcf'] < flat['preco_justo_dcf']
+
+    def test_no_price_when_historical_is_not_projectable_and_no_forward(self, monkeypatch):
+        # CAGR de +900% -> NaN. Sem forward utilizável, o DCF não sai: o
+        # chamador recai no DDM e metodo_valuation registra a substituição.
+        monkeypatch.setattr(v, 'get_fcf_series', lambda t: pd.Series([1000e6, 100e6]))
+        monkeypatch.setattr(v, 'USE_FORWARD_ESTIMATES', False)
         res = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0)
-        assert res['growth_rate'] == v.MAX_GROWTH_RATE
+        assert np.isnan(res['preco_justo_dcf'])
+        assert np.isnan(res['growth_rate'])
 
 
 class TestMetodoValuation:
