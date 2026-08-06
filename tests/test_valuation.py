@@ -524,6 +524,27 @@ class TestMetodoValuation:
         out = v.apply_valuation(df, self._fundamentals('Retail'), model='stock')
         assert out.loc[0, 'metodo_valuation'] == 'ddm'
 
+    def test_passes_row_forward_growth_to_dcf(self, monkeypatch):
+        # O crescimento vem da LINHA (já no CSV), não de uma busca por ticker.
+        captured = {}
+
+        def fake_dcf(ticker_sa, shares_total=None, beta=None, forward_growth=None):
+            captured['forward_growth'] = forward_growth
+            return {'preco_justo_dcf': 20.0, 'growth_rate': 0.148, 'fcf_base': 1.0,
+                    'cost_of_equity': 0.18, 'growth_source': 'forward'}
+
+        monkeypatch.setattr(v, 'dcf_valuation', fake_dcf)
+        monkeypatch.setattr(v, 'FORWARD_GROWTH_DRIVER', 'revenue')
+        df = pd.DataFrame({
+            'ticker': ['X'], 'ticker_sa': ['X.SA'], 'setor': ['Retail'],
+            'lpa': [2.0], 'vpa': [10.0], 'preco': [5.0],
+            'dividend_rate': [1.0], 'shares_total': [1e6],
+            'crescimento_receita_pct': [14.8], 'crescimento_lucro_pct': [9.2],
+        })
+        out = v.apply_valuation(df, self._fundamentals('Retail'), model='stock')
+        assert captured['forward_growth'] == pytest.approx(0.148)
+        assert out.loc[0, 'growth_source'] == 'forward'
+
 
 class TestAppendSnapshot:
     """Histórico append-only com preço justo, método e as premissas da rodada."""

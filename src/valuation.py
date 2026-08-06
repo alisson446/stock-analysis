@@ -520,11 +520,13 @@ def apply_valuation(df: pd.DataFrame, all_fundamentals: pd.DataFrame,
             primary_price = excess_returns_valuation(roe_decimal, vpa, coe=coe)
             method = 'excess_returns' if pd.notna(primary_price) else 'none'
         else:
-            # DCF 2-estágios para ações
+            # DCF 2-estágios para ações. O crescimento forward sai da própria
+            # linha (colunas já coletadas no CSV): nenhuma requisição por ticker.
             dcf_result = dcf_valuation(
                 row['ticker_sa'],
                 row.get('shares_total'),
                 beta,
+                forward_growth=resolve_forward_growth(row),
             )
             primary_price = dcf_result['preco_justo_dcf']
 
