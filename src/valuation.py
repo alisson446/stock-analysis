@@ -540,6 +540,7 @@ _SNAPSHOT_RESULT_COLS = [
     'preco_justo_graham', 'margem_seg_dcf_pct', 'margem_seg_graham_pct',
     'margem_seg_media_pct', 'undervalued', 'forte_desconto',
     'cost_of_equity_pct',
+    'crescimento_receita_pct', 'crescimento_lucro_pct', 'num_analistas',
 ]
 
 
@@ -579,9 +580,16 @@ def append_snapshot(df: pd.DataFrame, path: Path = None,
     snap['use_forward_estimates'] = USE_FORWARD_ESTIMATES
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    write_header = not path.exists()
-    snap.to_csv(path, mode='a', header=write_header, index=False)
+    n_linhas = len(snap)
+    # Reescreve em vez de 'mode=a': quando o conjunto de colunas muda entre
+    # rodadas, um append cru grava os valores fora das colunas do header antigo.
+    # O concat alinha por nome e preenche o que falta com NaN.
+    # ponytail: reescreve o arquivo inteiro; só vira problema se o histórico
+    # crescer a ponto de não caber em memória (dezenas de linhas por rodada).
+    if path.exists():
+        snap = pd.concat([pd.read_csv(path), snap], ignore_index=True)
+    snap.to_csv(path, index=False)
 
-    print(f"[valuation] snapshot de {len(snap)} linhas anexado a {path} "
+    print(f"[valuation] snapshot de {n_linhas} linhas anexado a {path} "
           f"(data={snapshot_date})")
     return path

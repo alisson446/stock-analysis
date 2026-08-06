@@ -434,6 +434,32 @@ class TestAppendSnapshot:
         assert len(out) == 2
         assert set(out['data_snapshot']) == {'2026-07-16', '2026-07-17'}
 
+    def test_snapshots_growth_columns(self, tmp_path):
+        p = tmp_path / 'hist.csv'
+        df = self._valued()
+        df['crescimento_receita_pct'] = [14.8]
+        df['crescimento_lucro_pct'] = [9.2]
+        df['num_analistas'] = [5]
+        v.append_snapshot(df, path=p, snapshot_date='2026-07-16')
+        out = pd.read_csv(p)
+        assert out.loc[0, 'crescimento_receita_pct'] == 14.8
+        assert out.loc[0, 'num_analistas'] == 5
+
+    def test_new_columns_align_with_older_history(self, tmp_path):
+        """Histórico gravado antes das colunas de crescimento não desalinha."""
+        p = tmp_path / 'hist.csv'
+        v.append_snapshot(self._valued(), path=p, snapshot_date='2026-07-16')
+
+        df = self._valued()
+        df['num_analistas'] = [5]
+        v.append_snapshot(df, path=p, snapshot_date='2026-07-17')
+
+        out = pd.read_csv(p)
+        assert len(out) == 2
+        assert pd.isna(out.loc[0, 'num_analistas'])
+        assert out.loc[1, 'num_analistas'] == 5
+        assert out.loc[0, 'metodo_valuation'] == 'dcf'
+
     def test_empty_df_is_a_noop(self, tmp_path):
         p = tmp_path / 'hist.csv'
         v.append_snapshot(pd.DataFrame(), path=p)
