@@ -353,6 +353,12 @@ def _fetch_fundamentals_from_api(tickers_sa: list[str], delay: float) -> pd.Data
                         if pd.notna(current_price) and pd.notna(eps) and eps > 0
                         else np.nan)
 
+            # Estimativas de analistas para o próximo exercício. Reaproveita o
+            # objeto `stock` já criado: 1 requisição HTTP a mais por ticker.
+            crescimento_receita_pct, crescimento_lucro_pct, num_analistas = (
+                _extract_growth_estimates(stock)
+            )
+
             records.append({
                 'ticker_sa': ticker_sa,
                 'ticker': ticker_sa.replace('.SA', ''),
@@ -379,6 +385,9 @@ def _fetch_fundamentals_from_api(tickers_sa: list[str], delay: float) -> pd.Data
                 'shares_outstanding': shares_outstanding,
                 'shares_total': shares_total,
                 'dividend_rate': dividend_rate,
+                'crescimento_receita_pct': crescimento_receita_pct,
+                'crescimento_lucro_pct': crescimento_lucro_pct,
+                'num_analistas': num_analistas,
             })
 
         except Exception as e:
@@ -394,7 +403,8 @@ def _fetch_fundamentals_from_api(tickers_sa: list[str], delay: float) -> pd.Data
                     'dl_ebit', 'dl_pl', 'roe_pct', 'liquidez_corrente', 'passivos_ativos',
                     'liq_media_diaria', 'lpa', 'vpa', 'dy_pct', 'divida_liquida',
                     'ebit', 'fcf_latest', 'shares_outstanding', 'shares_total',
-                    'dividend_rate',
+                    'dividend_rate', 'crescimento_receita_pct',
+                    'crescimento_lucro_pct', 'num_analistas',
                 ]}
             })
 
