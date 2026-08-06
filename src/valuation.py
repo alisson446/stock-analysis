@@ -45,6 +45,17 @@ TERMINAL_GROWTH = RISK_FREE_RATE  # Perpetuidade não pode exceder a economia
 # Liga o uso de estimativas forward de crescimento (analistas via yfinance) no
 # estágio 1 do DCF. Desligado por padrão -> comportamento = CAGR histórico.
 USE_FORWARD_ESTIMATES = _env_bool('USE_FORWARD_ESTIMATES', False)
+# Qual crescimento alimenta o estágio 1 do DCF: 'revenue' (receita, default) ou
+# 'earnings' (lucro). Receita é o default por razão estrutural, não amostral: o
+# DCF projeta fluxo de caixa livre (receita menos custos caixa e capex), e o
+# lucro contábil amplifica a mesma variação de receita via alavancagem
+# operacional, itens não recorrentes e efeitos fiscais.
+# Validado aqui em vez de num helper _env_str: é o único uso de string na env.
+FORWARD_GROWTH_DRIVER = os.getenv('FORWARD_GROWTH_DRIVER', 'revenue').strip().lower()
+if FORWARD_GROWTH_DRIVER not in ('revenue', 'earnings'):
+    print(f"[valuation] FORWARD_GROWTH_DRIVER={FORWARD_GROWTH_DRIVER!r} inválido, "
+          f"usando 'revenue'")
+    FORWARD_GROWTH_DRIVER = 'revenue'
 PROJECTION_YEARS = 10      # Horizonte de projeção (2 estágios: decay linear)
 MAX_GROWTH_RATE = 0.20     # Cap de crescimento anual
 MIN_GROWTH_RATE = 0.0      # Floor de crescimento
@@ -199,6 +210,39 @@ def discount_fcf_to_equity(fcf_base: float, growth: float, discount_rate: float,
     fair_price = equity_value / shares
 
     return fair_price if fair_price > 0 else np.nan
+
+
+def resolve_forward_growth(row) -> float:
+    """
+    Crescimento forward da linha do DataFrame, em decimal.
+
+    O dado já está em `data/fundamentals.csv` (colunas `crescimento_receita_pct`
+    e `crescimento_lucro_pct`, coletadas pelo screener), então não há requisição
+    nova: lê-se a coluna do driver configurado e converte de pontos percentuais
+    para decimal (14,8 -> 0,148).
+
+    Crescimento <= -100% é tratado como dado AUSENTE, não como valor extremo: só
+    acontece com o driver de lucro, quando o lucro vira prejuízo e o denominador
+    da razão (estimativa - realizado)/|realizado| cruza zero — a partir daí o
+    número não significa mais uma taxa. Recai no CAGR histórico como qualquer
+    estimativa faltante.
+
+    Não decide projetabilidade: essa avaliação fica concentrada em
+    `dcf_valuation`, com o limiar MAX_PROJECTABLE_GROWTH.
+
+    Args:
+        row: linha do DataFrame de fundamentos (pd.Series).
+
+    Returns:
+        Crescimento anual como decimal, ou NaN se ausente/inválido.
+    """
+    col = ('crescimento_receita_pct' if FORWARD_GROWTH_DRIVER == 'revenue'
+           else 'crescimento_lucro_pct')
+    value = row.get(col, np.nan)
+    if pd.isna(value):
+        return np.nan
+    growth = float(value) / 100.0
+    return growth if growth > -1.0 else np.nan
 
 
 def dcf_valuation(ticker_sa: str, shares_total: float = None,

@@ -1,3 +1,4 @@
+import importlib
 import sys
 from pathlib import Path
 
@@ -294,6 +295,78 @@ class TestEnvHelpers:
         assert v._env_bool('X_B') is False
         monkeypatch.delenv('X_B', raising=False)
         assert v._env_bool('X_B', default=False) is False
+
+
+class TestResolveForwardGrowth:
+    """
+    O crescimento forward vem da linha do CSV (já coletado pelo screener), não
+    de uma requisição nova por ticker. O driver escolhe a coluna: receita
+    (default) ou lucro.
+
+    Receita é o default porque o DCF projeta fluxo de caixa livre — receita
+    menos custos caixa e capex — e não lucro contábil, que oscila muito mais
+    para a mesma variação de receita (alavancagem operacional, itens não
+    recorrentes, efeitos fiscais).
+    """
+
+    @staticmethod
+    def _row(receita=14.8, lucro=9.2):
+        return pd.Series({
+            'crescimento_receita_pct': receita,
+            'crescimento_lucro_pct': lucro,
+        })
+
+    def test_reads_revenue_column_by_default(self, monkeypatch):
+        monkeypatch.setattr(v, 'FORWARD_GROWTH_DRIVER', 'revenue')
+        assert v.resolve_forward_growth(self._row()) == pytest.approx(0.148)
+
+    def test_reads_earnings_column_when_driver_is_earnings(self, monkeypatch):
+        monkeypatch.setattr(v, 'FORWARD_GROWTH_DRIVER', 'earnings')
+        assert v.resolve_forward_growth(self._row()) == pytest.approx(0.092)
+
+    def test_converts_percentage_points_to_decimal(self, monkeypatch):
+        # O CSV guarda pontos percentuais; o DCF trabalha em decimal.
+        monkeypatch.setattr(v, 'FORWARD_GROWTH_DRIVER', 'revenue')
+        assert v.resolve_forward_growth(self._row(receita=100.0)) == pytest.approx(1.0)
+
+    def test_keeps_negative_growth(self, monkeypatch):
+        # PETR4 com -4,61%: declínio é dado válido, não valor a ser corrigido.
+        monkeypatch.setattr(v, 'FORWARD_GROWTH_DRIVER', 'revenue')
+        assert v.resolve_forward_growth(self._row(receita=-4.61)) == pytest.approx(-0.0461)
+
+    def test_returns_nan_when_column_is_nan(self, monkeypatch):
+        monkeypatch.setattr(v, 'FORWARD_GROWTH_DRIVER', 'revenue')
+        assert np.isnan(v.resolve_forward_growth(self._row(receita=np.nan)))
+
+    def test_returns_nan_when_column_is_absent(self, monkeypatch):
+        monkeypatch.setattr(v, 'FORWARD_GROWTH_DRIVER', 'revenue')
+        assert np.isnan(v.resolve_forward_growth(pd.Series({'ticker': 'X'})))
+
+    def test_returns_nan_at_minus_one_hundred_percent(self, monkeypatch):
+        # Lucro que vira prejuízo: o denominador |realizado| cruza zero e a
+        # razão deixa de significar uma taxa. Dado inválido, não valor extremo.
+        monkeypatch.setattr(v, 'FORWARD_GROWTH_DRIVER', 'earnings')
+        assert np.isnan(v.resolve_forward_growth(self._row(lucro=-100.0)))
+
+    def test_returns_nan_below_minus_one_hundred_percent(self, monkeypatch):
+        monkeypatch.setattr(v, 'FORWARD_GROWTH_DRIVER', 'earnings')
+        assert np.isnan(v.resolve_forward_growth(self._row(lucro=-250.0)))
+
+    def test_invalid_driver_in_env_falls_back_to_revenue(self, monkeypatch):
+        # A validação acontece na leitura da env (import do módulo), por isso o
+        # reload: é o único jeito de reexecutar essa linha no teste.
+        monkeypatch.setenv('FORWARD_GROWTH_DRIVER', 'ebitda')
+        importlib.reload(v)
+        assert v.FORWARD_GROWTH_DRIVER == 'revenue'
+        monkeypatch.delenv('FORWARD_GROWTH_DRIVER')
+        importlib.reload(v)  # devolve o módulo ao estado normal p/ os outros testes
+
+    def test_earnings_driver_is_read_from_env(self, monkeypatch):
+        monkeypatch.setenv('FORWARD_GROWTH_DRIVER', 'earnings')
+        importlib.reload(v)
+        assert v.FORWARD_GROWTH_DRIVER == 'earnings'
+        monkeypatch.delenv('FORWARD_GROWTH_DRIVER')
+        importlib.reload(v)
 
 
 class TestForwardGrowth:
