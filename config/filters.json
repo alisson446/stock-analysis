@@ -12,7 +12,12 @@
     "liquidez_corrente_min": 1,
     "passivos_ativos_max": 1,
     "liq_media_diaria_min": 100000,
-    "lpa_min": 0
+    "lpa_min": 0,
+    "crescimento_receita_pct_min": 0,
+    "crescimento_lucro_pct_min": 0,
+    "num_analistas_min": 2,
+    "exigir_num_analistas": false,
+    "exigir_estimativa": false
   },
   "bank_filters": {
     "pl_min": 0,
@@ -23,6 +28,11 @@
     "margem_liquida_pct_min": 10,
     "lpa_min": 0,
     "liq_media_diaria_min": 100000,
-    "dy_pct_min": 3
+    "dy_pct_min": 3,
+    "crescimento_receita_pct_min": 0,
+    "crescimento_lucro_pct_min": 0,
+    "num_analistas_min": 2,
+    "exigir_num_analistas": false,
+    "exigir_estimativa": false
   }
 }
