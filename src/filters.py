@@ -11,6 +11,42 @@ def _load_config() -> dict:
         return json.load(f)
 
 
+def _growth_mask(df: pd.DataFrame, cfg: dict) -> pd.Series:
+    """
+    Máscara de crescimento projetado por analistas.
+
+    Duas flags independentes, cada uma ligando o seu próprio critério:
+    `exigir_estimativa` aplica os cortes de crescimento de receita e lucro;
+    `exigir_num_analistas` aplica o mínimo de analistas. Nenhuma altera o
+    significado da outra, e flag desligada significa critério não aplicado.
+
+    Com a flag ligada, valor NaN reprova: sem dado não há como atestar o
+    critério, e é justamente isso que a flag exige. Comparações do pandas com
+    NaN já retornam False, então esse comportamento sai de graça.
+
+    Args:
+        df: DataFrame com as colunas `crescimento_receita_pct`,
+            `crescimento_lucro_pct` e `num_analistas`.
+        cfg: bloco de configuração (`stock_filters` ou `bank_filters`).
+
+    Returns:
+        Série booleana indexada como `df`.
+    """
+    mask = pd.Series(True, index=df.index)
+
+    if cfg.get('exigir_estimativa'):
+        mask &= (
+            (df['crescimento_receita_pct'] > cfg['crescimento_receita_pct_min']) &
+            (df['crescimento_lucro_pct'] > cfg['crescimento_lucro_pct_min'])
+        )
+
+    # '>=' porque é contagem: num_analistas_min = 2 significa "pelo menos dois".
+    if cfg.get('exigir_num_analistas'):
+        mask &= df['num_analistas'] >= cfg['num_analistas_min']
+
+    return mask
+
+
 def apply_stock_filters(df: pd.DataFrame) -> pd.DataFrame:
     """
     Aplica critérios fundamentalistas para ações não-bancárias.
@@ -32,8 +68,13 @@ def apply_stock_filters(df: pd.DataFrame) -> pd.DataFrame:
         (df['lpa'] > cfg['lpa_min'])
     )
 
-    filtered = df[mask].copy().reset_index(drop=True)
-    print(f"[filters] Ações: {len(filtered)}/{len(df)} passaram nos critérios")
+    growth = _growth_mask(df, cfg)
+    filtered = df[mask & growth].copy().reset_index(drop=True)
+
+    # Quantas passaram nos fundamentos e caíram só pelo crescimento projetado
+    por_crescimento = int((mask & ~growth).sum())
+    print(f"[filters] Ações: {len(filtered)}/{len(df)} passaram nos critérios"
+          f" ({por_crescimento} reprovadas por crescimento projetado)")
     return filtered
 
 
@@ -54,6 +95,10 @@ def apply_bank_filters(df: pd.DataFrame) -> pd.DataFrame:
         (df['dy_pct'] > cfg['dy_pct_min'])
     )
 
-    filtered = df[mask].copy().reset_index(drop=True)
-    print(f"[filters] Bancos: {len(filtered)}/{len(df)} passaram nos critérios")
+    growth = _growth_mask(df, cfg)
+    filtered = df[mask & growth].copy().reset_index(drop=True)
+
+    por_crescimento = int((mask & ~growth).sum())
+    print(f"[filters] Bancos: {len(filtered)}/{len(df)} passaram nos critérios"
+          f" ({por_crescimento} reprovados por crescimento projetado)")
     return filtered
