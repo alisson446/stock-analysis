@@ -66,6 +66,16 @@ PROJECTION_YEARS = 10      # Horizonte de projeção (2 estágios: decay linear)
 # seleciona por MAGNITUDE, e magnitude não indica falta de confiabilidade — uma
 # empresa que cai todo ano por quatro anos produz um número grande e confiável.
 MAX_PROJECTABLE_GROWTH = 0.20
+# Segundo limiar de PROJETABILIDADE, e a outra metade da pergunta. O
+# MAX_PROJECTABLE_GROWTH acima responde "essa taxa se sustenta por 10 anos?".
+# Este responde "essa série descreve uma trajetória, ou são quatro números
+# soltos?" — via R², a fatia da variação da série que a reta de tendência
+# explica. Duas perguntas independentes, por isso duas constantes.
+# 0,5 é premissa, não calibração: a tendência precisa explicar MAIS DA METADE
+# da variação; abaixo disso o que a série tem é mais ruído do que trajetória.
+# Qualquer 0,45 ou 0,6 só se justificaria olhando quais ações passam, que é
+# exatamente o que a Guideline 3 proíbe.
+MIN_TREND_R2 = 0.5
 MIN_BETA = 0.5             # Clamp de beta (regressões de small caps produzem outliers)
 MAX_BETA = 2.5
 MIN_BETA_OBSERVATIONS = 30  # Mínimo de semanas para uma regressão de beta confiável
@@ -149,40 +159,72 @@ def compute_fcf_base(fcf_series: pd.Series) -> float:
     return base if base > 0 else np.nan
 
 
-def _compute_fcf_cagr(fcf_series: pd.Series) -> float:
+def _compute_fcf_growth(fcf_series: pd.Series) -> float:
     """
-    Calcula CAGR do Free Cash Flow a partir da série histórica.
-    A série vem do yfinance com o mais recente primeiro.
+    Crescimento anual do FCF a partir da TENDÊNCIA da série inteira.
 
-    Qualquer ano negativo zera o crescimento: uma série que passa pelo prejuízo
-    não sustenta extrapolação de crescimento composto. A versão anterior pulava
-    os negativos e media apenas entre os pontos positivos, o que transformava a
-    série cíclica da RSUL4 (21,2M → -9,8M → 41,8M) em "25% a.a.".
+    Ajusta uma reta sobre o logaritmo dos FCFs e usa a inclinação dela como
+    taxa. O logaritmo entra porque crescimento é multiplicativo: crescer 10%
+    todo ano vira uma reta perfeita no log, e a inclinação se lê direto como
+    taxa (exp(inclinação) - 1).
 
-    Não há piso: um CAGR negativo atravessa e a projeção começa em queda. E o
-    limiar de cima não substitui o valor — devolve NaN, ou seja "não projetável".
+    A versão anterior comparava só o primeiro e o último ponto e ignorava o
+    caminho entre eles. A RIAA3 (519 -> 951 -> 1.087 -> 351) saía como -12,2%
+    a.a., um número que não descreve nenhum dos anos: o cálculo não enxergava
+    que a empresa passou por 1.087 no meio.
+
+    Mas trocar o estimador não basta -- a regressão lê a RIAA3 como -9,9%, que
+    continua sem sentido. O defeito nunca foi o VALOR da tendência: é que não
+    existe tendência ali. Por isso o R² decide. Ele é a fatia da variação da
+    série que a reta explica, ou seja, responde "essa série conta uma história
+    ou são números soltos?". Abaixo de MIN_TREND_R2 a resposta é não e a função
+    devolve NaN: o DCF se declara inaplicável, o chamador recai no DDM e
+    metodo_valuation registra a troca. A taxa nunca é substituída por outra.
+
+    Uma empresa muito estável é rejeitada de propósito: quase toda a variação
+    dela é ruído -- porque quase não há variação -- e o R² fica baixo. É um erro
+    conhecido, e ele erra na direção barata: tira a ação da lista em vez de
+    fazê-la parecer barata.
+
+    Devolve NaN (não modelável) ou uma taxa que pode ser negativa. Nunca 0,0:
+    zerar seria substituir o número por outro e, pior, não é conservador --
+    o estágio 1 do DCF faz a taxa SUBIR de 0 até TERMINAL_GROWTH (12,4%), de
+    modo que a série com prejuízo acabava projetada acelerando.
     """
     if len(fcf_series) < 2:
-        return 0.0
-
-    # Ordenar do mais antigo ao mais recente
-    values = fcf_series.values[::-1]
-
-    if any(v <= 0 for v in values):
-        return 0.0
-
-    first, last = values[0], values[-1]
-    n_years = len(values) - 1
-
-    cagr = (last / first) ** (1 / n_years) - 1
-
-    # Acima do limiar não é "20%": é uma taxa que não se projeta por 10 anos.
-    # Devolver NaN faz o DCF se declarar inaplicável em vez de emitir o maior
-    # preço justo possível. Abaixo de zero passa direto: declínio é dado válido.
-    if cagr > MAX_PROJECTABLE_GROWTH:
         return np.nan
 
-    return cagr
+    # Ordenar do mais antigo ao mais recente: o yfinance entrega ao contrário.
+    values = fcf_series.values[::-1].astype(float)
+
+    # Não existe logaritmo de número negativo -- e uma série que passa pelo
+    # prejuízo não descreve trajetória de crescimento composto. Caso RSUL4:
+    # 21,2M -> 35,4M -> -9,8M -> 41,8M.
+    if any(v <= 0 for v in values):
+        return np.nan
+
+    log_values = np.log(values)
+    years = np.arange(len(values))
+
+    # Série constante: o R² seria uma divisão por zero (numpy devolveria NaN
+    # com RuntimeWarning). Mesmo destino da empresa muito estável descrito na
+    # docstring -- não modelável por DCF.
+    if np.ptp(log_values) == 0:
+        return np.nan
+
+    slope = np.polyfit(years, log_values, 1)[0]
+    growth = float(np.exp(slope) - 1)
+
+    r2 = float(np.corrcoef(years, log_values)[0, 1] ** 2)
+    if r2 < MIN_TREND_R2:
+        return np.nan
+
+    # Acima do limiar não é "20%": é uma taxa que não se projeta por 10 anos.
+    # Abaixo de zero passa direto: declínio é dado válido.
+    if growth > MAX_PROJECTABLE_GROWTH:
+        return np.nan
+
+    return growth
 
 
 def discount_fcf_to_equity(fcf_base: float, growth: float, discount_rate: float,
@@ -323,7 +365,7 @@ def dcf_valuation(ticker_sa: str, shares_total: float = None,
         # Crescimento inicial: CAGR histórico (pode ser NaN), substituído pela
         # estimativa forward quando ela está ligada, existe e é projetável.
         # Forward acima do limiar NÃO é capado: recua para o histórico.
-        initial_growth = _compute_fcf_cagr(fcf_series)
+        initial_growth = _compute_fcf_growth(fcf_series)
         growth_source = 'historical'
         if (USE_FORWARD_ESTIMATES
                 and forward_growth is not None and pd.notna(forward_growth)

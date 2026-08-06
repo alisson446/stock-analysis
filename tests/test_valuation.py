@@ -38,42 +38,74 @@ class TestResolveShareCount:
         assert np.isnan(v.resolve_share_count({}))
 
 
-class TestComputeFcfCagr:
+class TestComputeFcfGrowth:
     """
-    A versão antiga pulava anos negativos: para RSUL4 media 2022 (21,2M) ->
-    2025 (41,8M) e ignorava 2024 (-9,8M), chegando a 25,4% (capado em 20%).
+    O crescimento sai da TENDÊNCIA da série inteira (uma reta sobre o log dos
+    valores), não da comparação entre o primeiro e o último ponto. E só sai
+    quando existe tendência: se a reta não explica ao menos metade da variação
+    da série, a função devolve NaN e o DCF se declara inaplicável.
+
+    As séries reais abaixo ilustram comportamentos que o código precisa
+    distinguir. Nenhum limiar foi escolhido a partir delas.
     """
 
-    def test_returns_zero_when_series_contains_negative_year(self):
-        # RSUL4: mais recente primeiro
-        serie = pd.Series([41.82e6, -9.786e6, 35.426e6, 21.185e6])
-        assert v._compute_fcf_cagr(serie) == 0.0
-
-    def test_computes_cagr_from_first_and_last_year_when_all_positive(self):
-        # 100 -> 121 em 2 anos = 10% a.a.
+    def test_reads_clean_compound_growth_exactly(self):
+        # 100 -> 110 -> 121 é 10% a.a. exato: a reta passa pelos três pontos.
         serie = pd.Series([121.0, 110.0, 100.0])
-        assert v._compute_fcf_cagr(serie) == pytest.approx(0.10, abs=1e-6)
+        assert v._compute_fcf_growth(serie) == pytest.approx(0.10, abs=1e-6)
 
-    def test_returns_nan_when_cagr_is_above_projectable_threshold(self):
-        # 100 -> 1000 em 1 ano = +900%. Antes virava seed de 20%, o que produz
-        # o MAIOR preço justo que o modelo consegue emitir; agora o DCF se
-        # declara inaplicável e o chamador recai no DDM, rotulado.
+    def test_accepts_consistent_decline(self):
+        # KEPL3: 292 -> 207 -> 153 -> 51. Cai em todos os anos, então o número
+        # é grande E confiável. Passa sem piso: declínio é dado válido.
+        serie = pd.Series([51.0, 153.0, 207.0, 292.0])
+        assert v._compute_fcf_growth(serie) == pytest.approx(-0.4252, abs=1e-3)
+
+    def test_rejects_cyclical_series(self):
+        # RIAA3: 519 -> 951 -> 1.087 -> 351. Sobe, sobe, despenca. O cálculo
+        # pelas pontas dizia -12,2%, um número que não descreve nenhum ano.
+        # A regressão sozinha também não salva (-9,9%); quem barra é o R².
+        serie = pd.Series([351.0, 1087.0, 951.0, 519.0])
+        assert np.isnan(v._compute_fcf_growth(serie))
+
+    def test_rejects_series_that_returns_to_its_start(self):
+        # BLAU3: 134 -> 106 -> 366 -> 134. Termina onde começou. A regressão
+        # sozinha leria +13,2%, puxada pelo pico no penúltimo ponto.
+        serie = pd.Series([134.0, 366.0, 106.0, 134.0])
+        assert np.isnan(v._compute_fcf_growth(serie))
+
+    def test_returns_nan_when_series_contains_negative_year(self):
+        # RSUL4: 21,2M -> 35,4M -> -9,8M -> 41,8M. Antes devolvia 0.0, que o
+        # estágio 1 do DCF transforma em ACELERAÇÃO até TERMINAL_GROWTH --
+        # ou seja, zerar inflava o preço justo em vez de ser conservador.
+        serie = pd.Series([41.82e6, -9.786e6, 35.426e6, 21.185e6])
+        assert np.isnan(v._compute_fcf_growth(serie))
+
+    def test_returns_nan_for_single_year(self):
+        # Antes devolvia 0.0, pelo mesmo motivo e com o mesmo efeito.
+        assert np.isnan(v._compute_fcf_growth(pd.Series([100.0])))
+
+    def test_returns_nan_for_constant_series(self):
+        # Sem variação não há R² (divisão por zero). É o caso extremo da
+        # empresa muito estável, rejeitada de propósito: ela sai da lista em
+        # vez de aparecer como barata.
+        assert np.isnan(v._compute_fcf_growth(pd.Series([100.0] * 4)))
+
+    def test_returns_nan_when_growth_is_above_projectable_threshold(self):
+        # 100 -> 1000 em 1 ano = +900%. Dois pontos formam uma reta perfeita,
+        # então o R² deixa passar; quem barra é o limiar de projetabilidade.
         serie = pd.Series([1000.0, 100.0])
-        assert np.isnan(v._compute_fcf_cagr(serie))
+        assert np.isnan(v._compute_fcf_growth(serie))
 
-    def test_lets_negative_cagr_through_unchanged(self):
-        # 100 -> 50 em 1 ano = -50%. Sem piso: declínio é projetado como
-        # declínio, e isso só reduz o preço justo (erra excluindo).
-        serie = pd.Series([50.0, 100.0])
-        assert v._compute_fcf_cagr(serie) == pytest.approx(-0.50, abs=1e-9)
-
-    def test_accepts_cagr_exactly_at_the_threshold(self):
+    def test_accepts_growth_exactly_at_the_threshold(self):
         # 100 -> 120 em 1 ano = +20%: no limiar, ainda projetável.
         serie = pd.Series([120.0, 100.0])
-        assert v._compute_fcf_cagr(serie) == pytest.approx(v.MAX_PROJECTABLE_GROWTH, abs=1e-9)
+        assert v._compute_fcf_growth(serie) == pytest.approx(
+            v.MAX_PROJECTABLE_GROWTH, abs=1e-9)
 
-    def test_returns_zero_for_single_year(self):
-        assert v._compute_fcf_cagr(pd.Series([100.0])) == 0.0
+    def test_lets_negative_growth_through_unchanged(self):
+        # 100 -> 50 em 1 ano = -50%. Sem piso: só reduz o preço justo.
+        serie = pd.Series([50.0, 100.0])
+        assert v._compute_fcf_growth(serie) == pytest.approx(-0.50, abs=1e-9)
 
 
 class TestFcfBase:
@@ -626,6 +658,11 @@ class TestRsul4Regression:
     Regressão do caso que originou a correção: com os dados reais da RSUL4 o
     modelo dizia undervalued (R$ 309,53 vs preço R$ 47,36) enquanto a Simply
     Wall St dizia overvalued.
+
+    A série passa pelo prejuízo (-9,8M), então não há trajetória de crescimento
+    composto para projetar: o DCF não se aplica e o chamador recai no DDM. É
+    uma afirmação mais forte que a anterior (o preço justo ficar abaixo do
+    mercado), porque nenhum preço de DCF chega a ser emitido.
     """
 
     FCF_SERIES = pd.Series([41.82e6, -9.786e6, 35.426e6, 21.185e6])
@@ -633,9 +670,12 @@ class TestRsul4Regression:
     TOTAL_SHARES = 6_072_128
     BETA = 1.09
 
-    def test_fair_value_is_below_market_price(self):
+    def test_growth_is_not_projectable(self):
+        assert np.isnan(v._compute_fcf_growth(self.FCF_SERIES))
+
+    def test_dcf_emits_no_price(self):
         base = v.compute_fcf_base(self.FCF_SERIES)
-        growth = v._compute_fcf_cagr(self.FCF_SERIES)
+        growth = v._compute_fcf_growth(self.FCF_SERIES)
         coe = v.cost_of_equity(beta=self.BETA)
         fv = v.discount_fcf_to_equity(base, growth, coe, self.TOTAL_SHARES)
-        assert fv < self.PRICE, f"esperado overvalued, obtido preço justo R$ {fv:.2f}"
+        assert np.isnan(fv), f"esperado NaN (DCF inaplicável), obtido R$ {fv:.2f}"
