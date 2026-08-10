@@ -11,22 +11,32 @@ from src import filters
 
 
 def _cfg(exigir_estimativa=False, exigir_num_analistas=False,
-         receita_min=0, lucro_min=0, analistas_min=2):
+         exigir_lpa_estimado=False,
+         receita_min=0, lucro_min=0, analistas_min=2, lpa_est_min=0):
     return {
         'crescimento_receita_pct_min': receita_min,
         'crescimento_lucro_pct_min': lucro_min,
         'num_analistas_min': analistas_min,
+        'lpa_estimado_min': lpa_est_min,
         'exigir_num_analistas': exigir_num_analistas,
         'exigir_estimativa': exigir_estimativa,
+        'exigir_lpa_estimado': exigir_lpa_estimado,
     }
 
 
-def _df(rows):
-    """rows: lista de (crescimento_receita_pct, crescimento_lucro_pct, num_analistas)"""
-    return pd.DataFrame(
+def _df(rows, lpa_estimado=1.0):
+    """rows: lista de (crescimento_receita_pct, crescimento_lucro_pct, num_analistas)
+
+    `lpa_estimado` entra como coluna à parte, escalar ou lista. O default
+    positivo mantém os testes que não são sobre esse critério indiferentes a
+    ele; os testes do critério novo passam os valores explicitamente.
+    """
+    df = pd.DataFrame(
         rows,
         columns=['crescimento_receita_pct', 'crescimento_lucro_pct', 'num_analistas'],
     )
+    df['lpa_estimado'] = lpa_estimado
+    return df
 
 
 class TestGrowthMaskBothFlagsOn:
@@ -109,3 +119,85 @@ class TestGrowthMaskThresholds:
         df.index = [7, 42]
         mask = filters._growth_mask(df, _cfg(exigir_estimativa=True))
         assert mask.index.tolist() == [7, 42]
+
+
+class TestGrowthMaskLpaEstimado:
+    """Guarda de sinal: o nível projetado, não a variação."""
+
+    def _mask(self, rows, lpa_estimado):
+        return filters._growth_mask(
+            _df(rows, lpa_estimado=lpa_estimado),
+            _cfg(exigir_lpa_estimado=True),
+        )
+
+    def test_positive_lpa_estimado_passes(self):
+        assert self._mask([(6.0, 12.0, 4)], 2.49874).tolist() == [True]
+
+    def test_negative_lpa_estimado_fails(self):
+        assert self._mask([(6.0, 12.0, 4)], -0.14196).tolist() == [False]
+
+    def test_zero_lpa_estimado_fails_strict_comparison(self):
+        assert self._mask([(6.0, 12.0, 4)], 0.0).tolist() == [False]
+
+    def test_nan_lpa_estimado_fails(self):
+        assert self._mask([(6.0, 12.0, 4)], np.nan).tolist() == [False]
+
+    def test_positive_growth_with_projected_loss_fails(self):
+        """O caso que motiva a spec: AURE3 e HBRE3.
+
+        'Crescimento de lucro' de +88,6% que é um prejuízo encolhendo de
+        -1,25 para -0,14 por ação. Sem esta guarda a linha passa.
+        """
+        mask = filters._growth_mask(
+            _df([(8.0, 88.64, 3)], lpa_estimado=-0.14196),
+            _cfg(exigir_estimativa=True, exigir_lpa_estimado=True),
+        )
+        assert mask.tolist() == [False]
+
+    def test_same_row_passes_without_the_guard(self):
+        """Prova que a guarda é o que reprova, não os cortes de crescimento."""
+        mask = filters._growth_mask(
+            _df([(8.0, 88.64, 3)], lpa_estimado=-0.14196),
+            _cfg(exigir_estimativa=True),
+        )
+        assert mask.tolist() == [True]
+
+    def test_custom_threshold_is_respected(self):
+        mask = filters._growth_mask(
+            _df([(6.0, 12.0, 4), (6.0, 12.0, 4)], lpa_estimado=[0.40, 0.60]),
+            _cfg(exigir_lpa_estimado=True, lpa_est_min=0.5),
+        )
+        assert mask.tolist() == [False, True]
+
+
+class TestGrowthMaskLpaEstimadoIndependent:
+    """A terceira flag não altera o significado das outras duas."""
+
+    def test_off_ignores_negative_lpa_estimado(self):
+        mask = filters._growth_mask(
+            _df([(6.0, 12.0, 4)], lpa_estimado=-1.0), _cfg())
+        assert mask.tolist() == [True]
+
+    def test_only_lpa_decides_when_other_flags_off(self):
+        mask = filters._growth_mask(
+            _df([(-50.0, -80.0, 1), (99.0, 99.0, 9)], lpa_estimado=[2.0, -2.0]),
+            _cfg(exigir_lpa_estimado=True),
+        )
+        assert mask.tolist() == [True, False]
+
+    def test_all_three_flags_on_combine(self):
+        mask = filters._growth_mask(
+            _df([(6.0, 12.0, 4), (6.0, 12.0, 1), (6.0, -2.0, 4)],
+                lpa_estimado=[2.0, 2.0, 2.0]),
+            _cfg(exigir_estimativa=True, exigir_num_analistas=True,
+                 exigir_lpa_estimado=True),
+        )
+        assert mask.tolist() == [True, False, False]
+
+    def test_all_three_flags_off_passes_everything(self):
+        mask = filters._growth_mask(
+            _df([(-50.0, -80.0, 1), (np.nan, np.nan, np.nan)],
+                lpa_estimado=[-5.0, np.nan]),
+            _cfg(),
+        )
+        assert mask.tolist() == [True, True]

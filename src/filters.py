@@ -13,12 +13,21 @@ def _load_config() -> dict:
 
 def _growth_mask(df: pd.DataFrame, cfg: dict) -> pd.Series:
     """
-    Máscara de crescimento projetado por analistas.
+    Máscara de estimativas de analistas.
 
-    Duas flags independentes, cada uma ligando o seu próprio critério:
+    Três flags independentes, cada uma ligando o seu próprio critério:
     `exigir_estimativa` aplica os cortes de crescimento de receita e lucro;
-    `exigir_num_analistas` aplica o mínimo de analistas. Nenhuma altera o
+    `exigir_num_analistas` aplica o mínimo de analistas; `exigir_lpa_estimado`
+    aplica o corte sobre o nível de lucro por ação projetado. Nenhuma altera o
     significado da outra, e flag desligada significa critério não aplicado.
+
+    A guarda do `lpa_estimado` existe porque `crescimento_lucro_pct` é
+    estimativa sobre estimativa (o `yearAgoEps` da linha '+1y' do yfinance é a
+    estimativa do exercício corrente, não o lucro realizado). Com as duas
+    negativas a razão fica positiva, então um prejuízo encolhendo passa no
+    corte de crescimento: a AURE3 projeta -1,25 -> -0,14 por ação e aparece
+    como +88,6%. Comparar o NÍVEL contra zero é o que separa lucro crescendo de
+    prejuízo encolhendo — a variação sozinha não separa.
 
     Com a flag ligada, valor NaN reprova: sem dado não há como atestar o
     critério, e é justamente isso que a flag exige. Comparações do pandas com
@@ -26,7 +35,7 @@ def _growth_mask(df: pd.DataFrame, cfg: dict) -> pd.Series:
 
     Args:
         df: DataFrame com as colunas `crescimento_receita_pct`,
-            `crescimento_lucro_pct` e `num_analistas`.
+            `crescimento_lucro_pct`, `lpa_estimado` e `num_analistas`.
         cfg: bloco de configuração (`stock_filters` ou `bank_filters`).
 
     Returns:
@@ -43,6 +52,11 @@ def _growth_mask(df: pd.DataFrame, cfg: dict) -> pd.Series:
     # '>=' porque é contagem: num_analistas_min = 2 significa "pelo menos dois".
     if cfg.get('exigir_num_analistas'):
         mask &= df['num_analistas'] >= cfg['num_analistas_min']
+
+    # '>' estrito, como os demais cortes `_min` do projeto: LPA projetado
+    # exatamente zero não é lucro.
+    if cfg.get('exigir_lpa_estimado'):
+        mask &= df['lpa_estimado'] > cfg['lpa_estimado_min']
 
     return mask
 
