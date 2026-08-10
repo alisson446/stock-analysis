@@ -116,14 +116,25 @@ def _estimate_cell(frame, column: str) -> float:
         return np.nan
 
 
-def _extract_growth_estimates(stock) -> tuple[float, float, float]:
+def _extract_analyst_estimates(stock) -> tuple[float, float, float, float]:
     """
-    Crescimento projetado por analistas para o próximo exercício.
+    Estimativas de analistas para o próximo exercício.
 
     Usa `revenue_estimate` e `earnings_estimate`, que saem do mesmo módulo
     `earningsTrend` do quoteSummary e ficam em cache no objeto Ticker: acessar
     as duas custa 1 requisição HTTP. Não usar `growth_estimates`, que dispara
     uma segunda requisição para buscar dados de índice que não consumimos.
+
+    O `lpa_estimado` é o NÍVEL de lucro por ação projetado (coluna `avg`, em R$
+    por ação), não uma variação — sai do mesmo frame já em memória, então não
+    custa requisição nenhuma.
+
+    Ele existe porque o `crescimento_lucro_pct` ao lado é estimativa sobre
+    estimativa: o `yearAgoEps` da linha '+1y' é o `avg` da linha '0y', não o
+    lucro realizado. Com as duas estimativas negativas a razão fica POSITIVA, e
+    um prejuízo encolhendo vira "crescimento de lucro" — a AURE3 projeta -1,25
+    -> -0,14 por ação e isso aparece como +88,6%. Sem o nível ao lado, isso é
+    indistinguível de lucro crescendo.
 
     O número de analistas vem do `earnings_estimate` — o `revenue_estimate` não
     expõe contagem — e governa as duas métricas de crescimento.
@@ -132,18 +143,21 @@ def _extract_growth_estimates(stock) -> tuple[float, float, float]:
         stock: objeto `yf.Ticker` já construído.
 
     Returns:
-        (crescimento_receita_pct, crescimento_lucro_pct, num_analistas), em
-        pontos percentuais. Qualquer campo indisponível vem como NaN.
+        (crescimento_receita_pct, crescimento_lucro_pct, lpa_estimado,
+        num_analistas). Os dois primeiros em pontos percentuais, o terceiro em
+        R$ por ação (sem escalar), o último em contagem. Qualquer campo
+        indisponível vem como NaN.
     """
     try:
         revenue = stock.revenue_estimate
         earnings = stock.earnings_estimate
     except Exception:
-        return np.nan, np.nan, np.nan
+        return np.nan, np.nan, np.nan, np.nan
 
     return (
         _estimate_cell(revenue, 'growth') * 100,
         _estimate_cell(earnings, 'growth') * 100,
+        _estimate_cell(earnings, 'avg'),
         _estimate_cell(earnings, 'numberOfAnalysts'),
     )
 
@@ -355,8 +369,8 @@ def _fetch_fundamentals_from_api(tickers_sa: list[str], delay: float) -> pd.Data
 
             # Estimativas de analistas para o próximo exercício. Reaproveita o
             # objeto `stock` já criado: 1 requisição HTTP a mais por ticker.
-            crescimento_receita_pct, crescimento_lucro_pct, num_analistas = (
-                _extract_growth_estimates(stock)
+            crescimento_receita_pct, crescimento_lucro_pct, lpa_estimado, num_analistas = (
+                _extract_analyst_estimates(stock)
             )
 
             records.append({
@@ -387,6 +401,7 @@ def _fetch_fundamentals_from_api(tickers_sa: list[str], delay: float) -> pd.Data
                 'dividend_rate': dividend_rate,
                 'crescimento_receita_pct': crescimento_receita_pct,
                 'crescimento_lucro_pct': crescimento_lucro_pct,
+                'lpa_estimado': lpa_estimado,
                 'num_analistas': num_analistas,
             })
 
@@ -404,7 +419,7 @@ def _fetch_fundamentals_from_api(tickers_sa: list[str], delay: float) -> pd.Data
                     'liq_media_diaria', 'lpa', 'vpa', 'dy_pct', 'divida_liquida',
                     'ebit', 'fcf_latest', 'shares_outstanding', 'shares_total',
                     'dividend_rate', 'crescimento_receita_pct',
-                    'crescimento_lucro_pct', 'num_analistas',
+                    'crescimento_lucro_pct', 'lpa_estimado', 'num_analistas',
                 ]}
             })
 
