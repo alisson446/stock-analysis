@@ -655,7 +655,8 @@ _SNAPSHOT_RESULT_COLS = [
     'preco_justo_graham', 'margem_seg_dcf_pct', 'margem_seg_graham_pct',
     'margem_seg_media_pct', 'undervalued', 'forte_desconto',
     'cost_of_equity_pct',
-    'crescimento_receita_pct', 'crescimento_lucro_pct', 'num_analistas',
+    'crescimento_receita_pct', 'crescimento_lucro_pct', 'lpa_estimado',
+    'num_analistas',
 ]
 
 

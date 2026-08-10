@@ -666,6 +666,29 @@ class TestAppendSnapshot:
         out = pd.read_csv(p)
         assert out.loc[0, 'forward_growth_driver'] == 'earnings'
 
+    def test_snapshots_lpa_estimado(self, tmp_path):
+        p = tmp_path / 'hist.csv'
+        df = self._valued()
+        df['crescimento_lucro_pct'] = [15.27]
+        df['lpa_estimado'] = [2.49874]
+        v.append_snapshot(df, path=p, snapshot_date='2026-08-10')
+        out = pd.read_csv(p)
+        assert out.loc[0, 'lpa_estimado'] == pytest.approx(2.49874)
+
+    def test_lpa_estimado_aligns_with_history_written_before_it(self, tmp_path):
+        """As 277 linhas já gravadas recebem NaN, não desalinham."""
+        p = tmp_path / 'hist.csv'
+        v.append_snapshot(self._valued(), path=p, snapshot_date='2026-08-06')
+
+        df = self._valued()
+        df['lpa_estimado'] = [2.49874]
+        v.append_snapshot(df, path=p, snapshot_date='2026-08-10')
+
+        out = pd.read_csv(p)
+        assert len(out) == 2
+        assert pd.isna(out.loc[0, 'lpa_estimado'])
+        assert out.loc[1, 'lpa_estimado'] == pytest.approx(2.49874)
+
 
 class TestRsul4Regression:
     """
