@@ -815,11 +815,27 @@ Expected: coluna presente, imediatamente antes de `num_analistas`, ~170 com dado
 
 - [ ] **Step 4: Rodar o notebook de ponta a ponta**
 
-Abrir `analysis.ipynb` e executar todas as células. Conferir:
-- a tabela de screening mostra `lpa_estimado` formatado como `R$ x,xx`, entre o crescimento de lucro e o número de analistas;
-- o `print` do `[filters]` reporta a contagem de aprovadas;
-- a prévia do snapshot inclui a coluna nova;
-- nenhuma célula levanta exceção.
+Run: `rtk proxy python3 -m jupyter nbconvert --to notebook --execute --inplace analysis.ipynb`
+Expected: termina sem erro. Qualquer célula que levante exceção aborta o comando com stack trace — é esse o critério de aprovação.
+
+Depois, conferir o resultado no arquivo gravado:
+
+```bash
+rtk proxy python3 -c "
+import json
+nb = json.load(open('analysis.ipynb'))
+txt = json.dumps(nb)
+print('lpa_estimado aparece nos outputs:', txt.count('lpa_estimado'))
+erros = [c for c in nb['cells']
+         for o in c.get('outputs', []) if o.get('output_type') == 'error']
+print('celulas com erro:', len(erros))
+for c in nb['cells']:
+    for o in c.get('outputs', []):
+        if o.get('output_type') == 'stream' and '[filters]' in ''.join(o.get('text', [])):
+            print(''.join(o['text']).strip())
+"
+```
+Expected: `celulas com erro: 0`, `lpa_estimado` presente nos outputs, e as duas linhas do `[filters]` com as contagens de aprovadas.
 
 - [ ] **Step 5: Registrar o efeito no resultado**
 
