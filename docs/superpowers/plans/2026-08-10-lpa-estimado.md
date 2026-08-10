@@ -852,13 +852,47 @@ print(ult[['ticker','preco','preco_justo_dcf','crescimento_lucro_pct','lpa_estim
 ```
 Expected: a coluna `lpa_estimado` preenchida nas linhas novas, e NaN nas 277 linhas antigas.
 
-Comparar a lista de aprovadas com a rodada anterior. A spec prevê que HBRE3 seja reprovada, **se** estiver passando nos demais critérios — os outros 6 papéis com LPA projetado negativo já caíam pelo `lpa_min`. Se a diferença for maior que isso, investigar antes de commitar: pode ser deriva das estimativas entre coletas, mas pode ser defeito.
+**Não compare contra `valuation_history.csv`.** O arquivo é append-only e o notebook foi rodado várias vezes na mesma data (a data 2026-08-06 tem 179 linhas com 18 tickers duplicados), então "a lista aprovada da rodada anterior" não é recuperável dele. Comparar contra essa base produz uma divergência inventada.
+
+A medição correta é um **contrafactual sobre o dado de hoje**: rodar o filtro com a flag nova ligada e desligada, e ver o que muda.
+
+```bash
+rtk proxy python3 -c "
+import sys, json; sys.path.insert(0,'.')
+import pandas as pd
+from src import filters
+cfg = json.load(open('config/filters.json'))
+d = pd.read_csv('data/fundamentals.csv')
+for c in d.columns:
+    if c not in ('ticker_sa','ticker','nome','setor','industria'):
+        d[c] = pd.to_numeric(d[c], errors='coerce')
+
+def passa(flag_lpa):
+    c = dict(cfg['stock_filters']); c['exigir_lpa_estimado'] = flag_lpa
+    base = ((d.pl>c['pl_min'])&(d.pl<=c['pl_max'])&(d.pvp>c['pvp_min'])&(d.pvp<=c['pvp_max'])&
+            (d.margem_ebit_pct>c['margem_ebit_pct_min'])&(d.margem_liquida_pct>c['margem_liquida_pct_min'])&
+            (d.dl_ebit<c['dl_ebit_max'])&(d.dl_pl<c['dl_pl_max'])&(d.roe_pct>c['roe_pct_min'])&
+            (d.liquidez_corrente>c['liquidez_corrente_min'])&(d.passivos_ativos<c['passivos_ativos_max'])&
+            (d.liq_media_diaria>c['liq_media_diaria_min'])&(d.lpa>c['lpa_min']))
+    return set(d[base & filters._growth_mask(d, c)].ticker)
+
+com, sem = passa(True), passa(False)
+print('com o criterio novo:', len(com), '| sem:', len(sem))
+print('reprovadas pelo criterio novo:', sorted(sem - com) or 'NENHUMA')
+"
+```
+
+Expected: a lista de reprovadas contém apenas papéis cujo `lpa_estimado` é ≤ 0 **e** que passam em todos os demais critérios. `NENHUMA` é resultado válido e esperado quando os papéis com LPA projetado negativo já reprovam antes, em filtros de fundamento — o critério fica inerte no dado do dia sem estar defeituoso. Os testes unitários da Task 2 é que provam a lógica; este passo só confirma que ela não derruba nada que não devia.
+
+Investigar antes de commitar apenas se a lista de reprovadas contiver algum ticker com `lpa_estimado > 0`.
 
 - [ ] **Step 6: Commit**
 
+`data/` está no `.gitignore` deste repositório — `fundamentals.csv` e `valuation_history.csv` nunca foram versionados. O único arquivo com diff rastreável é o notebook, cujos outputs foram reescritos pela execução do Step 4.
+
 ```bash
-git add data/fundamentals.csv data/valuation_history.csv analysis.ipynb
-git commit -m "chore: regenera fundamentals com a coluna lpa_estimado
+git add analysis.ipynb
+git commit -m "chore: outputs do notebook com a coluna lpa_estimado
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
