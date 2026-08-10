@@ -11,7 +11,7 @@ def _load_config() -> dict:
         return json.load(f)
 
 
-def _growth_mask(df: pd.DataFrame, cfg: dict) -> pd.Series:
+def _estimates_mask(df: pd.DataFrame, cfg: dict) -> pd.Series:
     """
     Máscara de estimativas de analistas.
 
@@ -22,11 +22,11 @@ def _growth_mask(df: pd.DataFrame, cfg: dict) -> pd.Series:
     significado da outra, e flag desligada significa critério não aplicado.
 
     A guarda do `lpa_estimado` existe porque `crescimento_lucro_pct` é
-    estimativa sobre estimativa (o `yearAgoEps` da linha '+1y' do yfinance é a
-    estimativa do exercício corrente, não o lucro realizado). Com as duas
-    negativas a razão fica positiva, então um prejuízo encolhendo passa no
-    corte de crescimento: a AURE3 projeta -1,25 -> -0,14 por ação e aparece
-    como +88,6%. Comparar o NÍVEL contra zero é o que separa lucro crescendo de
+    estimativa sobre estimativa: compara a estimativa do próximo exercício com
+    a do exercício corrente, não com o lucro realizado. Com as duas negativas
+    a razão fica positiva, então um prejuízo encolhendo passa no corte de
+    crescimento: a AURE3 projeta -1,25 -> -0,14 por ação e aparece como
+    +88,6%. Comparar o NÍVEL contra zero é o que separa lucro crescendo de
     prejuízo encolhendo — a variação sozinha não separa.
 
     Com a flag ligada, valor NaN reprova: sem dado não há como atestar o
@@ -82,13 +82,15 @@ def apply_stock_filters(df: pd.DataFrame) -> pd.DataFrame:
         (df['lpa'] > cfg['lpa_min'])
     )
 
-    growth = _growth_mask(df, cfg)
-    filtered = df[mask & growth].copy().reset_index(drop=True)
+    estimates = _estimates_mask(df, cfg)
+    filtered = df[mask & estimates].copy().reset_index(drop=True)
 
-    # Quantas passaram nos fundamentos e caíram só pelo crescimento projetado
-    por_crescimento = int((mask & ~growth).sum())
+    # Quantas passaram nos fundamentos e caíram só pelas estimativas de
+    # analistas (crescimento de receita/lucro, nº de analistas ou LPA
+    # projetado — não é só crescimento, ver _estimates_mask)
+    por_estimativa = int((mask & ~estimates).sum())
     print(f"[filters] Ações: {len(filtered)}/{len(df)} passaram nos critérios"
-          f" ({por_crescimento} reprovadas por crescimento projetado)")
+          f" ({por_estimativa} reprovadas por estimativas de analistas)")
     return filtered
 
 
@@ -109,10 +111,10 @@ def apply_bank_filters(df: pd.DataFrame) -> pd.DataFrame:
         (df['dy_pct'] > cfg['dy_pct_min'])
     )
 
-    growth = _growth_mask(df, cfg)
-    filtered = df[mask & growth].copy().reset_index(drop=True)
+    estimates = _estimates_mask(df, cfg)
+    filtered = df[mask & estimates].copy().reset_index(drop=True)
 
-    por_crescimento = int((mask & ~growth).sum())
+    por_estimativa = int((mask & ~estimates).sum())
     print(f"[filters] Bancos: {len(filtered)}/{len(df)} passaram nos critérios"
-          f" ({por_crescimento} reprovados por crescimento projetado)")
+          f" ({por_estimativa} reprovados por estimativas de analistas)")
     return filtered

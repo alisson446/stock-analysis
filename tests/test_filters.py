@@ -39,11 +39,11 @@ def _df(rows, lpa_estimado=1.0):
     return df
 
 
-class TestGrowthMaskBothFlagsOn:
+class TestEstimatesMaskBothFlagsOn:
     """Com as duas flags ligadas, ambos os critérios valem em conjunto."""
 
     def _mask(self, rows):
-        return filters._growth_mask(
+        return filters._estimates_mask(
             _df(rows),
             _cfg(exigir_estimativa=True, exigir_num_analistas=True),
         )
@@ -76,39 +76,39 @@ class TestGrowthMaskBothFlagsOn:
         assert self._mask([(11.4, 14.5, np.nan)]).tolist() == [False]
 
 
-class TestGrowthMaskFlagsIndependent:
+class TestEstimatesMaskFlagsIndependent:
     """Cada flag liga somente o seu critério; nenhuma altera a outra."""
 
     def test_both_off_passes_everything(self):
         rows = [(-50.0, -80.0, 1), (np.nan, np.nan, np.nan)]
-        mask = filters._growth_mask(_df(rows), _cfg())
+        mask = filters._estimates_mask(_df(rows), _cfg())
         assert mask.tolist() == [True, True]
 
     def test_estimativa_off_ignores_negative_growth(self):
-        mask = filters._growth_mask(
+        mask = filters._estimates_mask(
             _df([(14.8, -2.4, 7)]), _cfg(exigir_num_analistas=True))
         assert mask.tolist() == [True]
 
     def test_analistas_off_ignores_analyst_count(self):
-        mask = filters._growth_mask(
+        mask = filters._estimates_mask(
             _df([(6.0, 12.8, np.nan)]), _cfg(exigir_estimativa=True))
         assert mask.tolist() == [True]
 
     def test_only_analysts_decide_when_estimativa_off(self):
         rows = [(-50.0, -80.0, 5), (99.0, 99.0, 1)]
-        mask = filters._growth_mask(_df(rows), _cfg(exigir_num_analistas=True))
+        mask = filters._estimates_mask(_df(rows), _cfg(exigir_num_analistas=True))
         assert mask.tolist() == [True, False]
 
     def test_only_growth_decides_when_analistas_off(self):
         rows = [(-50.0, -80.0, 5), (99.0, 99.0, 1)]
-        mask = filters._growth_mask(_df(rows), _cfg(exigir_estimativa=True))
+        mask = filters._estimates_mask(_df(rows), _cfg(exigir_estimativa=True))
         assert mask.tolist() == [False, True]
 
 
-class TestGrowthMaskThresholds:
+class TestEstimatesMaskThresholds:
 
     def test_custom_thresholds_are_respected(self):
-        mask = filters._growth_mask(
+        mask = filters._estimates_mask(
             _df([(9.0, 9.0, 5), (11.0, 11.0, 5)]),
             _cfg(exigir_estimativa=True, receita_min=10, lucro_min=10),
         )
@@ -117,15 +117,15 @@ class TestGrowthMaskThresholds:
     def test_mask_preserves_dataframe_index(self):
         df = _df([(15.0, 15.0, 5), (15.0, 15.0, 5)])
         df.index = [7, 42]
-        mask = filters._growth_mask(df, _cfg(exigir_estimativa=True))
+        mask = filters._estimates_mask(df, _cfg(exigir_estimativa=True))
         assert mask.index.tolist() == [7, 42]
 
 
-class TestGrowthMaskLpaEstimado:
+class TestEstimatesMaskLpaEstimado:
     """Guarda de sinal: o nível projetado, não a variação."""
 
     def _mask(self, rows, lpa_estimado):
-        return filters._growth_mask(
+        return filters._estimates_mask(
             _df(rows, lpa_estimado=lpa_estimado),
             _cfg(exigir_lpa_estimado=True),
         )
@@ -148,7 +148,7 @@ class TestGrowthMaskLpaEstimado:
         'Crescimento de lucro' de +88,6% que é um prejuízo encolhendo de
         -1,25 para -0,14 por ação. Sem esta guarda a linha passa.
         """
-        mask = filters._growth_mask(
+        mask = filters._estimates_mask(
             _df([(8.0, 88.64, 3)], lpa_estimado=-0.14196),
             _cfg(exigir_estimativa=True, exigir_lpa_estimado=True),
         )
@@ -156,37 +156,37 @@ class TestGrowthMaskLpaEstimado:
 
     def test_same_row_passes_without_the_guard(self):
         """Prova que a guarda é o que reprova, não os cortes de crescimento."""
-        mask = filters._growth_mask(
+        mask = filters._estimates_mask(
             _df([(8.0, 88.64, 3)], lpa_estimado=-0.14196),
             _cfg(exigir_estimativa=True),
         )
         assert mask.tolist() == [True]
 
     def test_custom_threshold_is_respected(self):
-        mask = filters._growth_mask(
+        mask = filters._estimates_mask(
             _df([(6.0, 12.0, 4), (6.0, 12.0, 4)], lpa_estimado=[0.40, 0.60]),
             _cfg(exigir_lpa_estimado=True, lpa_est_min=0.5),
         )
         assert mask.tolist() == [False, True]
 
 
-class TestGrowthMaskLpaEstimadoIndependent:
+class TestEstimatesMaskLpaEstimadoIndependent:
     """A terceira flag não altera o significado das outras duas."""
 
     def test_off_ignores_negative_lpa_estimado(self):
-        mask = filters._growth_mask(
+        mask = filters._estimates_mask(
             _df([(6.0, 12.0, 4)], lpa_estimado=-1.0), _cfg())
         assert mask.tolist() == [True]
 
     def test_only_lpa_decides_when_other_flags_off(self):
-        mask = filters._growth_mask(
+        mask = filters._estimates_mask(
             _df([(-50.0, -80.0, 1), (99.0, 99.0, 9)], lpa_estimado=[2.0, -2.0]),
             _cfg(exigir_lpa_estimado=True),
         )
         assert mask.tolist() == [True, False]
 
     def test_all_three_flags_on_combine(self):
-        mask = filters._growth_mask(
+        mask = filters._estimates_mask(
             _df([(6.0, 12.0, 4), (6.0, 12.0, 1), (6.0, -2.0, 4)],
                 lpa_estimado=[2.0, 2.0, 2.0]),
             _cfg(exigir_estimativa=True, exigir_num_analistas=True,
@@ -195,9 +195,25 @@ class TestGrowthMaskLpaEstimadoIndependent:
         assert mask.tolist() == [True, False, False]
 
     def test_all_three_flags_off_passes_everything(self):
-        mask = filters._growth_mask(
+        mask = filters._estimates_mask(
             _df([(-50.0, -80.0, 1), (np.nan, np.nan, np.nan)],
                 lpa_estimado=[-5.0, np.nan]),
             _cfg(),
         )
         assert mask.tolist() == [True, True]
+
+
+def test_shipped_config_has_the_lpa_guard_on():
+    """A guarda do LPA projetado protege o DCF (ver resolve_forward_growth em
+    src/valuation.py) contra tratar prejuízo encolhendo como crescimento de
+    lucro. Os testes acima cobrem `_estimates_mask` com configs fabricadas em
+    memória; nenhum lia o `config/filters.json` publicado. Como o código
+    acessa a flag via `cfg.get('exigir_lpa_estimado')`, se a chave sumir do
+    JSON o `.get` retorna None e a guarda para de aplicar em silêncio — sem
+    este teste, ninguém notaria antes de uma empresa com prejuízo projetado
+    voltar a passar no screener.
+    """
+    cfg = filters._load_config()
+    for block in ('stock_filters', 'bank_filters'):
+        assert cfg[block]['exigir_lpa_estimado'] is True
+        assert cfg[block]['lpa_estimado_min'] == 0

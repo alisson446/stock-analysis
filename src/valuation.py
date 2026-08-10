@@ -280,11 +280,23 @@ def resolve_forward_growth(row) -> float:
     nova: lê-se a coluna do driver configurado e converte de pontos percentuais
     para decimal (14,8 -> 0,148).
 
-    Crescimento <= -100% é tratado como dado AUSENTE, não como valor extremo: só
-    acontece com o driver de lucro, quando o lucro vira prejuízo e o denominador
-    da razão (estimativa - realizado)/|realizado| cruza zero — a partir daí o
-    número não significa mais uma taxa. Recai no crescimento histórico como
-    qualquer estimativa faltante.
+    `crescimento_lucro_pct` não compara a estimativa com o lucro realizado: é
+    (estimativa do exercício seguinte − estimativa do exercício corrente) /
+    |estimativa do exercício corrente|, as duas linhas ('+1y' e '0y') do
+    mesmo consenso de analistas. Com as duas estimativas negativas a razão
+    fica positiva, e um prejuízo projetado encolhendo aparece como
+    "crescimento de lucro" (ex.: AURE3, −1,25 → −0,14 por ação = +88,6%). Quem
+    protege esse caminho na prática é o filtro upstream `lpa_estimado > 0`
+    (`exigir_lpa_estimado` em `config/filters.json`): uma linha só chega até
+    aqui depois de já ter passado pelo corte de nível, então o caso do
+    parágrafo acima é descartado antes de virar taxa de crescimento do DCF.
+
+    Crescimento <= -100% é tratado como dado AUSENTE, não como valor extremo:
+    quando a estimativa do exercício seguinte é negativa o bastante para
+    superar em módulo a estimativa do exercício corrente, o número deixa de
+    funcionar como taxa de crescimento anual (uma queda de mais de 100% ao ano
+    não é uma taxa projetável, é um sinal de que o lucro projetado colapsa).
+    Recai no crescimento histórico como qualquer estimativa faltante.
 
     Não decide projetabilidade: essa avaliação fica concentrada em
     `dcf_valuation`, com o limiar MAX_PROJECTABLE_GROWTH.
