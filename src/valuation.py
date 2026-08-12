@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 from src.fundamentals import get_fcf_series, resolve_share_count
+from src import paths
 
 # Carrega variáveis de um .env se python-dotenv estiver instalado. O .env é
 # gitignored e guarda os dados que mudam com o tempo e que o yfinance NÃO
@@ -707,12 +708,10 @@ def apply_valuation(df: pd.DataFrame, all_fundamentals: pd.DataFrame,
 
 # Histórico de valuation: uma linha por (data, ticker), append-only, para
 # medir o drift do preço justo conforme fundamentos/estimativas/macro mudam.
-DATA_DIR = Path(__file__).resolve().parent.parent / 'data'
-VALUATION_HISTORY = DATA_DIR / 'valuation_history.csv'
 
 # Colunas do resultado que são snapshotadas (as que existirem no df).
 _SNAPSHOT_RESULT_COLS = [
-    'tipo', 'ticker', 'nome', 'setor', 'preco',
+    'tipo', 'regiao', 'moeda', 'ticker', 'nome', 'setor', 'preco',
     'preco_justo_dcf', 'metodo_valuation', 'growth_source',
     'preco_justo_graham', 'margem_seg_dcf_pct', 'margem_seg_graham_pct',
     'margem_seg_media_pct', 'undervalued', 'forte_desconto',
@@ -723,23 +722,30 @@ _SNAPSHOT_RESULT_COLS = [
 
 
 def append_snapshot(df: pd.DataFrame, path: Path = None,
-                    snapshot_date: str = None) -> Path:
+                    snapshot_date: str = None, region: str = 'br') -> Path:
     """
-    Anexa o resultado de valuation ao histórico append-only.
+    Anexa o resultado de valuation ao histórico append-only da região.
 
     Cada linha carrega, além do preço justo e da margem, as PREMISSAS usadas na
     rodada (RF, ERP, crescimento terminal, flag forward) — assim uma divergência
     futura pode ser atribuída a mudança de dado ou de premissa.
 
+    As premissas saem da MOEDA DE CADA LINHA, não de constantes do módulo: uma
+    linha avaliada em dólar que registrasse o juro brasileiro guardaria uma
+    premissa que não foi usada, indistinguível de uma verdadeira — destruindo
+    exatamente a garantia que estas colunas existem para dar.
+
     Args:
         df: DataFrame vindo de apply_valuation (opcionalmente com 'tipo').
-        path: Destino. Default: data/valuation_history.csv.
+        path: Destino. Default: data/<region>/valuation_history.csv.
         snapshot_date: Data ISO (YYYY-MM-DD). Default: hoje.
+        region: Região de destino, gravada na coluna `regiao`.
 
     Returns:
         O Path do arquivo escrito.
     """
-    path = Path(path) if path is not None else VALUATION_HISTORY
+    path = Path(path) if path is not None else paths.data_file(
+        region, 'valuation_history.csv')
     if snapshot_date is None:
         snapshot_date = pd.Timestamp.today().strftime('%Y-%m-%d')
 
@@ -747,14 +753,21 @@ def append_snapshot(df: pd.DataFrame, path: Path = None,
         print("[valuation] snapshot vazio, nada a gravar")
         return path
 
+    df = df.copy()
+    # Linhas sem moeda são brasileiras: é o que valia antes desta coluna existir.
+    if 'moeda' not in df.columns:
+        df['moeda'] = 'BRL'
+    df['regiao'] = region
+
     cols = [c for c in _SNAPSHOT_RESULT_COLS if c in df.columns]
     snap = df[cols].copy()
     snap.insert(0, 'data_snapshot', snapshot_date)
 
-    # Premissas da rodada (mesmas para todas as linhas).
-    snap['risk_free_rate'] = RISK_FREE_RATE
-    snap['equity_risk_premium'] = EQUITY_RISK_PREMIUM
-    snap['terminal_growth'] = TERMINAL_GROWTH
+    # Premissas da rodada, resolvidas pela moeda de cada linha.
+    macros = [macro_for(m) or {} for m in snap['moeda']]
+    snap['risk_free_rate'] = [m.get('risk_free_rate', np.nan) for m in macros]
+    snap['equity_risk_premium'] = [m.get('equity_risk_premium', np.nan) for m in macros]
+    snap['terminal_growth'] = [m.get('terminal_growth', np.nan) for m in macros]
     snap['use_forward_estimates'] = USE_FORWARD_ESTIMATES
     snap['forward_growth_driver'] = FORWARD_GROWTH_DRIVER
 

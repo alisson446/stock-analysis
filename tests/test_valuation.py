@@ -778,3 +778,74 @@ class TestCostOfEquityPorMoeda:
     def test_clamp_de_beta_continua_valendo(self):
         assert v.cost_of_equity(9.0, moeda='USD') == pytest.approx(
             0.042 + v.MAX_BETA * 0.045)
+
+
+class TestAppendSnapshotPorRegiao:
+    """
+    O docstring de append_snapshot diz que as premissas existem para atribuir
+    uma divergência futura a mudança de dado OU de premissa. Gravá-las a partir
+    de constantes do módulo faria a linha em dólar registrar o juro brasileiro:
+    uma premissa que não foi usada, indistinguível de uma verdadeira.
+    """
+
+    def _df(self, **cols):
+        base = {'ticker': ['X'], 'preco': [10.0], 'preco_justo_dcf': [12.0]}
+        base.update(cols)
+        return pd.DataFrame(base)
+
+    def test_grava_na_pasta_da_regiao(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(v.paths, 'DATA_ROOT', tmp_path)
+        out = v.append_snapshot(self._df(moeda=['USD']), region='us')
+        assert out == tmp_path / 'us' / 'valuation_history.csv'
+        assert out.exists()
+
+    def test_premissas_saem_da_moeda_da_linha(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(v.paths, 'DATA_ROOT', tmp_path)
+        df = self._df(ticker=['PETR4', 'AAPL'], preco=[10.0, 10.0],
+                      preco_justo_dcf=[12.0, 12.0], moeda=['BRL', 'USD'])
+
+        v.append_snapshot(df, region='us')
+
+        hist = pd.read_csv(tmp_path / 'us' / 'valuation_history.csv')
+        por_moeda = dict(zip(hist['moeda'], hist['risk_free_rate']))
+        assert por_moeda['BRL'] == pytest.approx(v.RISK_FREE_RATE)
+        assert por_moeda['USD'] == pytest.approx(0.042)
+
+    def test_terminal_growth_tambem_e_por_linha(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(v.paths, 'DATA_ROOT', tmp_path)
+        df = self._df(ticker=['PETR4', 'AAPL'], preco=[10.0, 10.0],
+                      preco_justo_dcf=[12.0, 12.0], moeda=['BRL', 'USD'])
+
+        v.append_snapshot(df, region='us')
+
+        hist = pd.read_csv(tmp_path / 'us' / 'valuation_history.csv')
+        assert dict(zip(hist['moeda'], hist['terminal_growth']))['USD'] == pytest.approx(0.042)
+
+    def test_sem_coluna_moeda_assume_brl(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(v.paths, 'DATA_ROOT', tmp_path)
+        v.append_snapshot(self._df(), region='br')
+        hist = pd.read_csv(tmp_path / 'br' / 'valuation_history.csv')
+        assert list(hist['moeda']) == ['BRL']
+        assert hist['risk_free_rate'].iloc[0] == pytest.approx(v.RISK_FREE_RATE)
+
+    def test_regiao_vira_coluna(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(v.paths, 'DATA_ROOT', tmp_path)
+        v.append_snapshot(self._df(moeda=['USD']), region='us')
+        hist = pd.read_csv(tmp_path / 'us' / 'valuation_history.csv')
+        assert list(hist['regiao']) == ['us']
+
+    def test_tipo_de_banco_americano_continua_banco(self, tmp_path, monkeypatch):
+        # `tipo` separa banco de não-banco; `regiao` diz de onde veio. Se `tipo`
+        # virasse 'bdr', o JPMorgan ficaria indistinguível de uma varejista.
+        monkeypatch.setattr(v.paths, 'DATA_ROOT', tmp_path)
+        v.append_snapshot(self._df(tipo=['banco'], moeda=['USD']), region='us')
+        hist = pd.read_csv(tmp_path / 'us' / 'valuation_history.csv')
+        assert list(hist['tipo']) == ['banco']
+        assert list(hist['regiao']) == ['us']
+
+    def test_append_preserva_as_linhas_anteriores(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(v.paths, 'DATA_ROOT', tmp_path)
+        v.append_snapshot(self._df(moeda=['USD']), region='us', snapshot_date='2026-01-01')
+        v.append_snapshot(self._df(moeda=['USD']), region='us', snapshot_date='2026-02-01')
+        hist = pd.read_csv(tmp_path / 'us' / 'valuation_history.csv')
+        assert sorted(hist['data_snapshot'].unique()) == ['2026-01-01', '2026-02-01']
