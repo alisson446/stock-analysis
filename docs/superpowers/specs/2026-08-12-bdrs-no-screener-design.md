@@ -112,6 +112,13 @@ ações não-inteira e cotação implícita 15% fora.
 
 Com o portão aplicado, a amostra de 22 aprovou 21 e rejeitou exatamente o par errado.
 
+**Alcance dessa evidência:** a medição restringiu os candidatos a bolsas **americanas**
+(`NYQ`, `NMS`, `NGM`, `NCM`, `ASE`, `PCX`, `BTS`) e descartou símbolos com `-` (preferenciais). Os
+21/22 valem para essa configuração. O desenho aceita candidatos de qualquer bolsa estrangeira, e
+para as demais praças a taxa de resolução é **desconhecida** — o portão continua protegendo contra
+par errado, mas a fração que resolve não foi medida. A implementação deve imprimir a taxa de
+resolução por bolsa, para que isso deixe de ser suposição na primeira rodada real.
+
 **O portão não converte nada e não lê cotação nenhuma.** Ele deriva a cotação implícita e a compara
 com a mediana do próprio universo. Por isso continua válido sob a decisão de não haver conversão de
 moeda, e funciona com qualquer moeda de pregão do subjacente — desde que a mediana seja calculada
@@ -148,10 +155,12 @@ negocia em USD e reporta em TWD. O P/L recalculado desses dois quebraria exatame
 **Em uma frase: o BDR é o ticker negociável; o subjacente é a empresa, na moeda dela.**
 
 ```
-yf.screen(region=BDR_REGION)          944 papéis (mcap > 500M, medição de 2026-08-12)
-        │  filtra shortName ~ /DR[N123]/
+yf.screen(region=BDR_REGION)          953 papéis (mcap > 500M, medição de 2026-08-12)
+        │  filtra shortName ~ /DR[N123]\b/
         ▼
-   312 BDRs                            data/bdrs.csv (cache, padrão do data/tickers.csv)
+   625 BDRs, 594 com longName          data/bdrs.csv (cache, padrão do data/tickers.csv)
+        │  o payload do screener já traz preço, volume e ações do BDR:
+        │  nenhuma requisição extra para o lado brasileiro
         │
         │  yf.Search(longName) → candidato em bolsa estrangeira
         ▼
@@ -184,23 +193,52 @@ yf.screen(region=BDR_REGION)          944 papéis (mcap > 500M, medição de 202
 ### Identificação do BDR
 
 O `shortName` do screener carrega o marcador do tipo de recibo: `DRN` para não-patrocinado, `DR1`,
-`DR2` e `DR3` para os patrocinados. O regex é `\bDR[N123]\b`.
+`DR2` e `DR3` para os patrocinados. **O regex é `DR[N123]\b` — sem `\b` na frente.**
 
-Isso separa BDR de ação brasileira e de FII sem lista hard-coded:
+A ausência da borda inicial não é descuido. O `shortName` é um campo de largura fixa, e quando o
+nome da empresa ocupa a largura inteira o marcador fica **colado** nele, sem espaço:
 
 | symbol | shortName | longName | é BDR |
 |---|---|---|---|
 | `Z1TS34.SA` | `ZOETIS INC  DRN` | Zoetis Inc. | sim |
+| `Z2LL34.SA` | `ZILLOW GROUPDRN` | Zillow Group, Inc. | sim — **sem espaço** |
+| `W1HR34.SA` | `WHIRLPOOL CODRN` | Whirlpool Corporation | sim — **sem espaço** |
+| `WFCO34.SA` | `WELLS FARGO DRN ED` | Wells Fargo & Company | sim — sufixo `ED` |
+| `STZB34.SA` | `CONSTELLATIODRN ED` | Constellation Brands | sim — **os dois casos** |
 | `JBSS32.SA` | `JBS N.V.    DR2` | JBS N.V. | sim |
 | `XPBR31.SA` | `XP INC      DR1` | XP Inc. | sim |
 | `YDUQ3.SA` | `YDUQS PART  ON      NM` | Yduqs Participações S.A. | não |
 | `ZIFI11.SA` | `FII ZION    CI` | Zion Capital FI | não |
+
+Um `\b` inicial exigiria o espaço e **descartaria 305 dos 625 BDRs — 49% do universo — em
+silêncio.** A borda final é necessária porque `ED` (ex-dividendo) aparece depois do marcador em 36
+papéis, então ancorar no fim da string também falharia.
+
+Validado sobre o universo de 2026-08-12: `DR[N123]\b` marca 625 papéis, com **zero** falsos
+positivos (nenhum ticker no formato de ação ou FII brasileiro) e **zero** falsos negativos (nenhum
+ticker no formato `XXXX3[1-9]` ficou de fora). Os únicos sufixos observados após o marcador são
+vazio (589) e `ED` (36).
 
 O `longName` do BDR é o nome legal da empresa estrangeira, sem adaptação — é ele que alimenta a
 busca pelo ticker do subjacente.
 
 `NUBR33.SA` não existe mais no Yahoo (404 no `.info`, ausente do screener); o Nubank aparece como
 `ROXO34.SA → NU`. Nenhum tratamento especial: o papel simplesmente não entra no universo.
+
+### As colunas do lado brasileiro saem do próprio screener
+
+O payload do `yf.screen` já carrega tudo que o lado BDR precisa, então **nenhuma requisição
+adicional é feita ao ticker do BDR**:
+
+| coluna | origem no payload |
+|---|---|
+| `preco_bdr` (R$) | `regularMarketPrice` |
+| `liq_media_diaria_bdr` (R$) | `averageDailyVolume10Day` × `regularMarketPrice` |
+| ações do BDR (para a razão) | `sharesOutstanding` |
+| `ticker_bdr`, `longName` | `symbol`, `longName` |
+
+Isso importa para o custo da coleta: o "dois tickers por BDR" citado em "Onde os dados ficam" é o
+subjacente mais a busca, não uma terceira ida ao BDR.
 
 ### Portão de qualidade
 
@@ -279,6 +317,13 @@ A verificação das duas últimas foi feita lendo o código: ambas agregam apena
 adimensionais, então a mistura de moedas não as corrompe.
 
 Elas têm, ainda assim, um problema de **modelagem** — ver a seção seguinte.
+
+**Compatibilidade com o cache existente.** `data/fundamentals.csv` tem 372 linhas gravadas antes
+desta spec e **não** possui a coluna `moeda`. Código que a exija quebra ao ler o cache atual, e o
+sintoma seria um `KeyError` numa rodada que só queria reaproveitar dado já coletado. A leitura
+assume `BRL` quando a coluna está ausente — o que é verdade para todas as linhas já gravadas, já
+que o universo até aqui é inteiramente brasileiro. Coletas novas gravam a coluna a partir de
+`financialCurrency`.
 
 ### Medianas setoriais são por balde, não do universo inteiro
 
@@ -388,11 +433,17 @@ atribuída a mudança de dado ou de premissa". Com BDR avaliado a 4,2% em dólar
 gravaria 12,4% em reais: uma premissa que não foi usada, registrada de forma indistinguível de uma
 verdadeira. O histórico passaria a mentir exatamente sobre o que foi feito para não mentir.
 
-### Consequência conhecida: BDRs devem dominar o ranking
+### Consequência conhecida: entre os BDRs que passarem, a margem tende a ser maior
 
 Descontar a 4,2% em vez de 12,4% produz preço justo estruturalmente mais alto em relação ao preço.
-Como o top-20 ordena por `margem_seg_media_pct`, é esperado que os BDRs ocupem a maior parte da
-lista assim que entrarem.
+Como o top-20 ordena por `margem_seg_media_pct`, **os BDRs que chegarem ao ranking tendem a chegar
+por cima**.
+
+Quantos chegam é outra questão, e as duas decisões desta spec puxam em sentidos opostos: os
+limiares idênticos (`pl_max: 10`) devem deixar passar poucos papéis americanos, enquanto o custo de
+capital menor eleva a margem de quem passa. O resultado combinado — lista curta e concentrada no
+topo, ou lista curta e irrelevante — **não é previsível sem rodar**, e nenhuma das duas decisões
+foi tomada olhando para esse resultado, o que a Guideline 3 proíbe. A primeira execução responde.
 
 Não é defeito do modelo. Reflete um fato: ativo brasileiro precisa render mais porque o juro em
 reais é maior, então uma ação daqui tem que estar genuinamente mais barata para empatar com uma de
@@ -415,9 +466,12 @@ suficiente para o leitor ver a origem de cada linha.
 | `.env.example` | `RISK_FREE_RATE_USD`, `EQUITY_RISK_PREMIUM_USD`, `BDR_REGION` |
 | `analysis.ipynb` | terceiro balde com `tipo = 'bdr'`; medianas setoriais do balde de BDR vindas de `fundamentals_bdr` |
 
-`src/bdrs.py` é o único módulo com lógica nova. Sua fronteira é estreita: recebe uma região,
-devolve um DataFrame de pares `(ticker_bdr, ticker_subjacente, razao, moeda)` já validados. Quem
-consome não precisa saber nada sobre screener, marcadores, tolerâncias ou elegibilidade.
+`src/bdrs.py` é o único módulo com lógica nova. Sua fronteira é estreita: recebe uma região e
+devolve um DataFrame já validado, com uma linha por par aprovado e as colunas
+`ticker_bdr`, `ticker_subjacente`, `razao`, `moeda`, `preco_bdr` e `liq_media_diaria_bdr` — as duas
+últimas vindas do payload do screener, como descrito em "As colunas do lado brasileiro saem do
+próprio screener". Quem consome não precisa saber nada sobre screener, marcadores, tolerâncias ou
+elegibilidade.
 
 ## Tratamento de erro
 
@@ -444,7 +498,11 @@ Seguindo o padrão de `tests/test_filters.py` e `tests/test_fundamentals.py`, so
 construídos à mão — nunca sobre o cache, pela Guideline 3.
 
 **`src/bdrs.py`**
-- marcador `DR[N123]` aceita `DRN`, `DR1`, `DR2`, `DR3` e rejeita `ON NM`, `PN`, `CI`
+- marcador `DR[N123]\b` aceita `DRN`, `DR1`, `DR2`, `DR3` e rejeita `ON NM`, `PN`, `CI`
+- **marcador colado ao nome** (`'ZILLOW GROUPDRN'`, `'WHIRLPOOL CODRN'`) é aceito — é a regressão do
+  `\b` inicial, que descartava 49% do universo em silêncio
+- **marcador seguido de `ED`** (`'WELLS FARGO DRN ED'`) é aceito, e o caso com os dois problemas
+  juntos (`'CONSTELLATIODRN ED'`) também
 - portão aprova pares concordantes; rejeita razão não-inteira; rejeita cotação implícita fora da
   tolerância
 - fronteira da tolerância: desvio exatamente no limite, logo abaixo e logo acima
