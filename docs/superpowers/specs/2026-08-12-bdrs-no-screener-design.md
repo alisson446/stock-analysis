@@ -421,6 +421,19 @@ critério nenhum.
 O nome com sufixo `_bdr` é deliberado: é o único critério do arquivo `us` cujo valor está em reais,
 e o sufixo impede que ele seja lido como "cem mil dólares" por quem editar o arquivo depois.
 
+**E nenhuma cotação é necessária para aplicá-lo.** `liq_media_diaria_bdr` sai de
+`regularMarketPrice × averageDailyVolume10Day` do payload do screener, ambos do pregão de B3 e
+ambos em reais (`TSMC34.SA`: 278,75 × 165.690 = R$ 46.186.088, medição de 2026-08-12). A comparação
+é reais contra reais. Câmbio só faria falta no critério que esta spec descarta — filtrar pela
+liquidez do subjacente, que está em USD, TWD ou JPY.
+
+Vale registrar por que apenas essa chave precisou de sufixo. Levantando as unidades de todos os
+critérios: `pl`, `pvp`, `dl_ebit`, `dl_pl`, `passivos_ativos` e `liquidez_corrente` são
+adimensionais; `margem_*_pct`, `roe_pct`, `crescimento_*_pct` e `dy_pct` são percentuais;
+`num_analistas_min` é contagem. Sobram `lpa_min` e `lpa_estimado_min`, que **são** em moeda — mas
+valem `0`, e zero é o mesmo em qualquer moeda. A liquidez é o único limite com magnitude monetária
+no arquivo inteiro.
+
 **`dy_pct` é bruto e não filtra.** O dividendo de empresa estrangeira sofre retenção na fonte antes
 de chegar ao detentor do BDR (30% no caso americano), então o `dividendYield` do yfinance é o
 rendimento do acionista local. A coluna é exibida com o rótulo dizendo que é bruta, e o
