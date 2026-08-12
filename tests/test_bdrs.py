@@ -79,3 +79,58 @@ class TestSelecionarBDRs:
              'longName': 'Microsoft Corporation'},
         ]
         assert [q['symbol'] for q in bdrs.selecionar_bdrs(quotes)] == ['MSFT34.SA']
+
+
+class _BuscaFake:
+    """Substitui yf.Search nos testes: devolve quotes fixos por nome."""
+
+    def __init__(self, por_nome):
+        self.por_nome = por_nome
+
+    def __call__(self, nome, max_results=12):
+        if nome not in self.por_nome:
+            raise RuntimeError('sem resultado')
+        return type('R', (), {'quotes': self.por_nome[nome]})()
+
+
+class TestResolverSubjacente:
+    """
+    A busca por nome não é confiável sozinha — ela casou Fomento Económico
+    Mexicano com Vista Energy. O portão da Task 9 é que torna isso utilizável;
+    aqui só garantimos que o candidato escolhido é uma ação estrangeira.
+    """
+
+    def test_escolhe_a_acao_em_bolsa_estrangeira(self):
+        busca = _BuscaFake({'Apple Inc.': [
+            {'symbol': 'AAPL34.SA', 'exchange': 'SAO', 'quoteType': 'EQUITY'},
+            {'symbol': 'AAPL', 'exchange': 'NMS', 'quoteType': 'EQUITY'},
+        ]})
+        assert bdrs.resolver_subjacente('Apple Inc.', buscar=busca) == 'AAPL'
+
+    def test_ignora_o_proprio_bdr(self):
+        busca = _BuscaFake({'X': [{'symbol': 'X34.SA', 'exchange': 'SAO',
+                                   'quoteType': 'EQUITY'}]})
+        assert bdrs.resolver_subjacente('X', buscar=busca) is None
+
+    def test_ignora_preferenciais_com_hifen(self):
+        # WFC-PY e WFC-PC são preferenciais; a ordinária é WFC.
+        busca = _BuscaFake({'Wells Fargo & Company': [
+            {'symbol': 'WFC-PY', 'exchange': 'NYQ', 'quoteType': 'EQUITY'},
+            {'symbol': 'WFC', 'exchange': 'NYQ', 'quoteType': 'EQUITY'},
+        ]})
+        assert bdrs.resolver_subjacente('Wells Fargo & Company', buscar=busca) == 'WFC'
+
+    def test_ignora_o_que_nao_e_acao(self):
+        busca = _BuscaFake({'X': [
+            {'symbol': 'XOPT', 'exchange': 'NYQ', 'quoteType': 'OPTION'},
+            {'symbol': 'XETF', 'exchange': 'NYQ', 'quoteType': 'ETF'},
+        ]})
+        assert bdrs.resolver_subjacente('X', buscar=busca) is None
+
+    def test_busca_que_falha_devolve_none(self):
+        busca = _BuscaFake({})
+        assert bdrs.resolver_subjacente('Inexistente', buscar=busca) is None
+
+    def test_sem_candidato_devolve_none(self):
+        busca = _BuscaFake({'X': []})
+        assert bdrs.resolver_subjacente('X', buscar=busca) is None

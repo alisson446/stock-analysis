@@ -72,3 +72,41 @@ def buscar_universo(region: str = 'br', mcap_min: int = 500_000_000,
 
     print(f"[bdrs] {len(quotes)} papéis na região {region}")
     return quotes
+
+
+# A bolsa do próprio BDR. Qualquer outra praça é candidata a subjacente.
+_BOLSA_DO_BDR = 'SAO'
+
+
+def resolver_subjacente(long_name: str, buscar=None) -> str | None:
+    """
+    Encontra o ticker do ativo subjacente a partir do nome legal da empresa.
+
+    A busca do Yahoo não é confiável sozinha: ela casou 'Fomento Económico
+    Mexicano' com 'VIST' (Vista Energy). Quem torna isso utilizável é o portão
+    de qualidade, que rejeita o par por duas medidas independentes da razão do
+    BDR. Aqui só descartamos o que nem candidato é.
+
+    Símbolos com '-' são preferenciais e classes especiais (WFC-PY, WFC-PC) —
+    queremos a ordinária, que é a que o BDR referencia.
+
+    Args:
+        long_name: nome legal vindo do `longName` do screener.
+        buscar: injetável nos testes; por padrão `yf.Search`.
+
+    Returns:
+        O ticker do subjacente, ou None quando nada serve.
+    """
+    buscar = buscar if buscar is not None else yf.Search
+    try:
+        quotes = buscar(long_name, max_results=12).quotes
+    except Exception:
+        return None
+
+    for q in quotes:
+        simbolo = q.get('symbol') or ''
+        if (q.get('quoteType') == 'EQUITY'
+                and q.get('exchange') != _BOLSA_DO_BDR
+                and '-' not in simbolo):
+            return simbolo
+    return None
