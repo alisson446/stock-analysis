@@ -68,7 +68,11 @@ def macro_for(moeda: str) -> dict | None:
         dict com `risk_free_rate`, `equity_risk_premium` e `terminal_growth`,
         ou None quando a moeda não tem premissas definidas.
     """
-    moeda = (moeda or '').strip().upper()
+    # Moeda ausente não é moeda: uma coluna lida de CSV traz NaN (float) onde o
+    # dado faltou, e NaN é "verdadeiro" para o `or`. Sem premissa não há taxa.
+    if not isinstance(moeda, str):
+        return None
+    moeda = moeda.strip().upper()
     if not moeda:
         return None
 
@@ -368,13 +372,14 @@ def resolve_forward_growth(row) -> float:
 
 
 def dcf_valuation(ticker_sa: str, shares_total: float = None,
-                  beta: float = None, forward_growth: float = None) -> dict:
+                  beta: float = None, forward_growth: float = None,
+                  moeda: str = 'BRL') -> dict:
     """
     Calcula preço justo via DCF de 2 estágios sobre FCF alavancado (estilo SWS).
 
-    Estágio 1: taxa decai linearmente do crescimento inicial até TERMINAL_GROWTH
-    ao longo de PROJECTION_YEARS anos.
-    Estágio 2: perpetuidade de Gordon a TERMINAL_GROWTH.
+    Estágio 1: taxa decai linearmente do crescimento inicial até o crescimento
+    terminal DA MOEDA do balanço, ao longo de PROJECTION_YEARS anos.
+    Estágio 2: perpetuidade de Gordon a esse mesmo crescimento terminal.
 
     Crescimento inicial: por padrão é o crescimento histórico do FCF (tendência
     log-linear). Com USE_FORWARD_ESTIMATES ligado, usa a estimativa forward
@@ -393,6 +398,10 @@ def dcf_valuation(ticker_sa: str, shares_total: float = None,
         forward_growth: Crescimento forward já resolvido em decimal, tipicamente
             de resolve_forward_growth(row). Nunca é buscado aqui dentro: o dado
             já está no CSV de fundamentos.
+        moeda: Moeda do BALANÇO da empresa, que é a moeda do fluxo projetado e
+            portanto a que decide o juro de desconto e o crescimento na
+            perpetuidade. Default 'BRL' — o que valia antes desta coluna
+            existir, e verdade para todas as linhas gravadas até então.
 
     Returns:
         dict com 'preco_justo_dcf', 'growth_rate', 'fcf_base', 'cost_of_equity',
@@ -426,7 +435,13 @@ def dcf_valuation(ticker_sa: str, shares_total: float = None,
         if shares_total is None or pd.isna(shares_total) or shares_total <= 0:
             return result
 
-        coe = cost_of_equity(beta)
+        coe = cost_of_equity(beta, moeda=moeda)
+        # Desconto e crescimento na perpetuidade saem da MESMA moeda: misturar
+        # um fluxo em dólar com juro de real embutiria inflação de reais num
+        # fluxo que não a tem. Moeda sem premissas deixa os dois NaN, e o
+        # modelo sai sem preço em vez de sair com um número inventado.
+        macro = macro_for(moeda)
+        terminal_growth = macro['terminal_growth'] if macro else np.nan
 
         # Crescimento inicial: crescimento histórico do FCF (pode ser NaN),
         # substituído pela estimativa forward quando ela está ligada, existe e
@@ -452,6 +467,7 @@ def dcf_valuation(ticker_sa: str, shares_total: float = None,
             growth=initial_growth,
             discount_rate=coe,
             shares=shares_total,
+            terminal_growth=terminal_growth,
         )
         result['growth_rate'] = initial_growth
         result['fcf_base'] = fcf_base
@@ -592,6 +608,13 @@ def apply_valuation(df: pd.DataFrame, all_fundamentals: pd.DataFrame,
     - 'stock': DCF 2-estágios (primário), DDM fallback, Graham (secundário)
     - 'bank': Excess Returns (primário), Graham (secundário)
 
+    O juro de desconto e o crescimento na perpetuidade saem da coluna `moeda`
+    DE CADA LINHA (real quando a coluna não existe), e não de constantes do
+    módulo. É a mesma moeda que `append_snapshot` usa para gravar as premissas:
+    uma linha em dólar descontada a juro brasileiro sairia no histórico com
+    12,4% de custo de capital ao lado de um juro de 4,2%, dois números que não
+    podem ser verdadeiros ao mesmo tempo.
+
     Args:
         df: DataFrame de ações/bancos filtrados
         all_fundamentals: DataFrame completo para cálculo de médias setoriais
@@ -614,7 +637,20 @@ def apply_valuation(df: pd.DataFrame, all_fundamentals: pd.DataFrame,
         # Beta do SETOR, não da empresa: small caps ilíquidas medem beta
         # artificialmente baixo por não negociarem (ver compute_sector_betas).
         beta = sector_betas.get(row.get('setor', ''), np.nan)
-        coe = cost_of_equity(beta)
+
+        # Moeda do BALANÇO da linha. É ela que decide o juro de desconto e o
+        # crescimento na perpetuidade — e é a mesma que `append_snapshot` grava
+        # na coluna de premissas. Se as duas divergirem, o histórico registra
+        # uma premissa que não foi usada, indistinguível de uma verdadeira.
+        # Coluna ausente significa real: mesma regra de compatibilidade do
+        # resto do pipeline, verdadeira para todas as linhas já gravadas.
+        moeda = row.get('moeda', 'BRL')
+        macro = macro_for(moeda) or {}
+        # NaN quando a moeda não tem premissas. Todo modelo abaixo devolve NaN
+        # com taxa NaN, de propósito: preço justo tirado de juro faltante sai
+        # com cara de calculado e chega ao usuário como recomendação.
+        g_terminal = macro.get('terminal_growth', np.nan)
+        coe = cost_of_equity(beta, moeda=moeda)
         coes.append(coe)
 
         growth_source = ''
@@ -626,7 +662,8 @@ def apply_valuation(df: pd.DataFrame, all_fundamentals: pd.DataFrame,
             if pd.notna(roe_decimal):
                 roe_decimal = roe_decimal / 100.0
             vpa = row.get('vpa', np.nan)
-            primary_price = excess_returns_valuation(roe_decimal, vpa, coe=coe)
+            primary_price = excess_returns_valuation(
+                roe_decimal, vpa, coe=coe, terminal_growth=g_terminal)
             method = 'excess_returns' if pd.notna(primary_price) else 'none'
         else:
             # DCF 2-estágios para ações. O crescimento forward sai da própria
@@ -636,6 +673,7 @@ def apply_valuation(df: pd.DataFrame, all_fundamentals: pd.DataFrame,
                 row.get('shares_total'),
                 beta,
                 forward_growth=resolve_forward_growth(row),
+                moeda=moeda,
             )
             primary_price = dcf_result['preco_justo_dcf']
 
@@ -647,7 +685,8 @@ def apply_valuation(df: pd.DataFrame, all_fundamentals: pd.DataFrame,
                 # negativo em incorporadoras). Rotulado explicitamente para não
                 # se confundir com um DCF de verdade.
                 dps = row.get('dividend_rate', np.nan)
-                primary_price = ddm_valuation(dps, discount_rate=coe)
+                primary_price = ddm_valuation(dps, discount_rate=coe,
+                                              growth_rate=g_terminal)
                 method = 'ddm' if pd.notna(primary_price) else 'none'
 
         primary_prices.append(primary_price)

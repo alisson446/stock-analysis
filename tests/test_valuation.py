@@ -574,7 +574,8 @@ class TestMetodoValuation:
         # O crescimento vem da LINHA (já no CSV), não de uma busca por ticker.
         captured = {}
 
-        def fake_dcf(ticker_sa, shares_total=None, beta=None, forward_growth=None):
+        def fake_dcf(ticker_sa, shares_total=None, beta=None, forward_growth=None,
+                     moeda='BRL'):
             captured['forward_growth'] = forward_growth
             return {'preco_justo_dcf': 20.0, 'growth_rate': 0.148, 'fcf_base': 1.0,
                     'cost_of_equity': 0.18, 'growth_source': 'forward'}
@@ -849,3 +850,162 @@ class TestAppendSnapshotPorRegiao:
         v.append_snapshot(self._df(moeda=['USD']), region='us', snapshot_date='2026-02-01')
         hist = pd.read_csv(tmp_path / 'us' / 'valuation_history.csv')
         assert sorted(hist['data_snapshot'].unique()) == ['2026-01-01', '2026-02-01']
+
+
+class TestApplyValuationUsaAMoedaDaLinha:
+    """
+    A taxa usada e a premissa gravada têm que ser a mesma coisa.
+
+    `append_snapshot` grava o juro e o prêmio de risco da moeda de cada linha.
+    Se o valuation descontar tudo a juro brasileiro, a linha em dólar sai com
+    custo de capital de 19,9% ao lado de um juro de 4,2% — dois números que não
+    podem ser verdadeiros ao mesmo tempo, e um histórico que mente exatamente
+    sobre o que foi feito para não mentir.
+    """
+
+    @staticmethod
+    def _fundamentals(setor='Retail'):
+        # >=2 linhas por setor para as medianas de Graham; beta_raw = 1,0 para
+        # o beta setorial ser previsível e a conta do CAPM ficar à vista.
+        return pd.DataFrame({
+            'ticker': ['A', 'B'], 'setor': [setor, setor],
+            'pl': [8.0, 9.0], 'pvp': [1.0, 1.1], 'beta_raw': [1.0, 1.0],
+        })
+
+    @staticmethod
+    def _linha(**cols):
+        base = {'ticker': ['X'], 'ticker_sa': ['X'], 'setor': ['Retail'],
+                'lpa': [2.0], 'vpa': [10.0], 'preco': [5.0],
+                'dividend_rate': [1.0], 'shares_total': [1e6]}
+        base.update(cols)
+        return pd.DataFrame(base)
+
+    @pytest.fixture(autouse=True)
+    def _sem_rede(self, monkeypatch):
+        # Sem série de FCF o DCF sai cedo, sem tocar na rede. O que este bloco
+        # testa é a taxa de desconto, não o modelo.
+        monkeypatch.setattr(v, 'get_fcf_series', lambda t: pd.Series(dtype=float))
+
+    def test_linha_em_dolar_usa_o_custo_de_capital_do_dolar(self):
+        out = v.apply_valuation(self._linha(moeda=['USD']), self._fundamentals())
+        assert out.loc[0, 'cost_of_equity_pct'] == pytest.approx(
+            (0.042 + 1.0 * 0.045) * 100)
+
+    def test_linha_em_dolar_nao_usa_as_premissas_brasileiras(self):
+        out = v.apply_valuation(self._linha(moeda=['USD']), self._fundamentals())
+        brasileiro = (v.RISK_FREE_RATE + 1.0 * v.EQUITY_RISK_PREMIUM) * 100
+        assert out.loc[0, 'cost_of_equity_pct'] != pytest.approx(brasileiro)
+
+    def test_linha_em_reais_continua_como_antes(self):
+        esperado = (v.RISK_FREE_RATE + 1.0 * v.EQUITY_RISK_PREMIUM) * 100
+        out = v.apply_valuation(self._linha(moeda=['BRL']), self._fundamentals())
+        assert out.loc[0, 'cost_of_equity_pct'] == pytest.approx(esperado)
+
+    def test_sem_coluna_moeda_assume_reais(self):
+        # Regra de compatibilidade do resto do pipeline: as linhas gravadas
+        # antes da coluna existir são todas brasileiras.
+        assert 'moeda' not in self._linha().columns
+        esperado = (v.RISK_FREE_RATE + 1.0 * v.EQUITY_RISK_PREMIUM) * 100
+        out = v.apply_valuation(self._linha(), self._fundamentals())
+        assert out.loc[0, 'cost_of_equity_pct'] == pytest.approx(esperado)
+
+    def test_custo_de_capital_e_premissas_do_snapshot_batem(self, tmp_path,
+                                                            monkeypatch):
+        # A trava contra o defeito voltar: em CADA linha do histórico,
+        # custo de capital = juro livre de risco + beta × prêmio de risco,
+        # com os três números saindo do mesmo arquivo.
+        monkeypatch.setattr(v.paths, 'DATA_ROOT', tmp_path)
+        df = self._linha(ticker=['PETR4', 'AAPL'], ticker_sa=['PETR4.SA', 'AAPL'],
+                         setor=['Retail', 'Retail'], lpa=[2.0, 2.0],
+                         vpa=[10.0, 10.0], preco=[5.0, 5.0],
+                         dividend_rate=[1.0, 1.0], shares_total=[1e6, 1e6],
+                         moeda=['BRL', 'USD'])
+
+        valued = v.apply_valuation(df, self._fundamentals())
+        v.append_snapshot(valued, region='us')
+
+        hist = pd.read_csv(tmp_path / 'us' / 'valuation_history.csv')
+        beta_setorial = 1.0
+        assert set(hist['moeda']) == {'BRL', 'USD'}
+        for _, linha in hist.iterrows():
+            esperado = (linha['risk_free_rate']
+                        + beta_setorial * linha['equity_risk_premium']) * 100
+            assert linha['cost_of_equity_pct'] == pytest.approx(esperado)
+
+    def test_banco_em_dolar_desconta_com_crescimento_terminal_do_dolar(self):
+        banco = self._linha(ticker=['JPM'], ticker_sa=['JPM'], setor=['Banks'],
+                            roe_pct=[25.0], moeda=['USD'])
+        out = v.apply_valuation(banco, self._fundamentals('Banks'), model='bank')
+
+        coe_usd = 0.042 + 1.0 * 0.045
+        esperado = v.excess_returns_valuation(0.25, 10.0, coe=coe_usd,
+                                              terminal_growth=0.042)
+        assert out.loc[0, 'preco_justo_dcf'] == pytest.approx(esperado)
+        # Com o crescimento na perpetuidade em reais (12,4%, acima do custo de
+        # capital em dólar de 8,7%) o modelo nem sairia com preço: os dois
+        # números são de mundos diferentes.
+        assert pd.isna(v.excess_returns_valuation(
+            0.25, 10.0, coe=coe_usd, terminal_growth=v.TERMINAL_GROWTH))
+
+    def test_moeda_sem_premissas_nao_produz_preco(self):
+        # Sem juro livre de risco não existe taxa de desconto, e um preço justo
+        # tirado de taxa faltante chega ao usuário como recomendação.
+        out = v.apply_valuation(self._linha(moeda=['TWD']), self._fundamentals())
+        assert pd.isna(out.loc[0, 'cost_of_equity_pct'])
+        assert pd.isna(out.loc[0, 'preco_justo_dcf'])
+        assert not out.loc[0, 'undervalued']
+
+    def test_dcf_recebe_a_moeda_da_linha(self, monkeypatch):
+        capturado = {}
+
+        def fake_dcf(ticker_sa, shares_total=None, beta=None, forward_growth=None,
+                     moeda='BRL'):
+            capturado['moeda'] = moeda
+            return {'preco_justo_dcf': 20.0, 'growth_rate': 0.1, 'fcf_base': 1.0,
+                    'cost_of_equity': 0.087, 'growth_source': 'historical'}
+
+        monkeypatch.setattr(v, 'dcf_valuation', fake_dcf)
+        v.apply_valuation(self._linha(moeda=['USD']), self._fundamentals())
+        assert capturado['moeda'] == 'USD'
+
+
+class TestDcfValuationPorMoeda:
+    """O DCF desconta e projeta a perpetuidade na moeda do balanço."""
+
+    @staticmethod
+    def _serie_crescendo():
+        # yfinance entrega do mais recente ao mais antigo: +10% ao ano.
+        return pd.Series([133.1e6, 121e6, 110e6, 100e6])
+
+    def _esperado(self, discount_rate, terminal_growth):
+        return v.discount_fcf_to_equity(
+            fcf_base=float(np.median(self._serie_crescendo().values)),
+            growth=0.10, discount_rate=discount_rate, shares=1e6,
+            terminal_growth=terminal_growth)
+
+    def test_dolar_usa_juro_e_perpetuidade_do_dolar(self, monkeypatch):
+        monkeypatch.setattr(v, 'get_fcf_series', lambda t: self._serie_crescendo())
+
+        res = v.dcf_valuation('AAPL', shares_total=1e6, beta=1.0, moeda='USD')
+
+        assert res['cost_of_equity'] == pytest.approx(0.042 + 0.045)
+        assert res['preco_justo_dcf'] == pytest.approx(
+            self._esperado(0.042 + 0.045, 0.042))
+
+    def test_default_continua_em_reais(self, monkeypatch):
+        monkeypatch.setattr(v, 'get_fcf_series', lambda t: self._serie_crescendo())
+
+        res = v.dcf_valuation('PETR4.SA', shares_total=1e6, beta=1.0)
+
+        coe_br = v.RISK_FREE_RATE + v.EQUITY_RISK_PREMIUM
+        assert res['cost_of_equity'] == pytest.approx(coe_br)
+        assert res['preco_justo_dcf'] == pytest.approx(
+            self._esperado(coe_br, v.TERMINAL_GROWTH))
+
+    def test_moeda_sem_premissas_sai_sem_preco(self, monkeypatch):
+        monkeypatch.setattr(v, 'get_fcf_series', lambda t: self._serie_crescendo())
+
+        res = v.dcf_valuation('TSM', shares_total=1e6, beta=1.0, moeda='TWD')
+
+        assert pd.isna(res['preco_justo_dcf'])
+        assert pd.isna(res['cost_of_equity'])
