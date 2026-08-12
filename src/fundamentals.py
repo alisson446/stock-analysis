@@ -176,6 +176,35 @@ def _extract_analyst_estimates(stock) -> tuple[float, float, float, float]:
     )
 
 
+# Índice de mercado de cada região, para a regressão de beta.
+#
+# O beta mede quanto o papel oscila em relação AO MERCADO DELE. Regredir uma
+# ação americana contra o Ibovespa não mede o risco da empresa — mede o quanto
+# as duas bolsas andam juntas, que é outra coisa e bem menor. Daria betas
+# baixos demais e, por consequência, preço justo alto demais.
+INDICE_POR_REGIAO = {
+    'br': '^BVSP',   # Ibovespa
+    'us': '^GSPC',   # S&P 500
+}
+
+
+def indice_da_regiao(region: str) -> str:
+    """
+    Índice contra o qual regredir o beta dos papéis da região.
+
+    Região sem índice definido é erro, não palpite: cair num default silencioso
+    produziria beta medido contra o mercado errado, e o número sai com a mesma
+    aparência de um correto.
+    """
+    if region not in INDICE_POR_REGIAO:
+        raise KeyError(
+            f"região {region!r} não tem índice de mercado definido. "
+            f"Acrescente em INDICE_POR_REGIAO (atuais: "
+            f"{sorted(INDICE_POR_REGIAO)})."
+        )
+    return INDICE_POR_REGIAO[region]
+
+
 def fetch_betas(tickers_sa: list[str], index_symbol: str = '^BVSP',
                 period: str = '5y') -> pd.Series:
     """

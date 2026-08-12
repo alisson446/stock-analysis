@@ -325,3 +325,25 @@ class TestListaDeTickersVazia:
         f.fetch_fundamentals([], region='us')
 
         assert not (tmp_path / 'us' / 'fundamentals.csv').exists()
+
+
+class TestIndiceDaRegiao:
+    """
+    Beta mede a oscilação do papel contra o mercado DELE. Regredir uma ação
+    americana contra o Ibovespa mede o quanto as duas bolsas andam juntas —
+    outra grandeza, e menor: daria beta baixo e preço justo alto demais.
+    """
+
+    def test_br_usa_o_ibovespa(self):
+        assert f.indice_da_regiao('br') == '^BVSP'
+
+    def test_us_usa_o_sp500(self):
+        assert f.indice_da_regiao('us') == '^GSPC'
+
+    def test_regiao_sem_indice_levanta_erro_nomeando_o_que_existe(self):
+        # Default silencioso mediria contra o mercado errado, e o número sairia
+        # com a mesma cara de um correto.
+        with pytest.raises(KeyError) as exc:
+            f.indice_da_regiao('jp')
+        assert 'jp' in str(exc.value)
+        assert 'INDICE_POR_REGIAO' in str(exc.value)

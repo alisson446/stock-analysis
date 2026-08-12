@@ -157,7 +157,7 @@ negocia em USD e reporta em TWD. O P/L recalculado desses dois quebraria exatame
 **Em uma frase: o BDR é o ticker negociável; o subjacente é a empresa, na moeda dela.**
 
 ```
-yf.screen(region=BDR_REGION)          953 papéis (mcap > 500M, medição de 2026-08-12)
+yf.screen(region='br')                953 papéis (mcap > 500M, medição de 2026-08-12)
         │  filtra shortName ~ /DR[N123]\b/
         ▼
    625 BDRs, 594 com longName          (universo intermediário, não vira arquivo)
@@ -301,9 +301,12 @@ config/
 ```
 
 **A região de uma pasta é onde o ticker é negociado**, não onde a busca começou. `data/us/` guarda
-`AAPL` e `MSFT` — os subjacentes —, descobertos a partir dos BDRs de B3. `BDR_REGION` continua sendo
-apenas o universo varrido pelo `yf.screen` (`br`), e a pasta de destino sai da bolsa do subjacente
-resolvido.
+`AAPL` e `MSFT` — os subjacentes —, descobertos a partir dos BDRs de B3.
+
+A variável `REGION` do `.env` escolhe **qual região analisar**, e o notebook roda uma por execução.
+A bolsa varrida para achar os BDRs é sempre `br` — isso não é configuração, é definição: um BDR é
+um recibo listado em B3. Está fixa em `bdrs.REGIAO_DOS_BDRS`. A região de destino de cada papel sai
+da bolsa do subjacente resolvido.
 
 Essa distinção é o que mantém o desenho viável: a Descoberta 2 mostrou que `yf.screen(region='us')`
 não enumera o mercado americano, então uma pasta de região **não** pode ser populada varrendo aquela
@@ -504,8 +507,9 @@ As constantes macro passam a ser resolvidas pelo sufixo da moeda do balanço:
 RISK_FREE_RATE_USD=0.042        # Treasury longo. Default: 0.042
 EQUITY_RISK_PREMIUM_USD=0.045   # Prêmio de risco EUA. Default: 0.045
 
-# Região varrida pelo yf.screen para montar o universo de BDRs. Default: br
-BDR_REGION=br
+# Região a analisar; o notebook roda uma por execução. Default: br
+#   br  ações brasileiras          us  ações americanas via BDR, em dólar
+REGION=br
 ```
 
 `RISK_FREE_RATE` e `EQUITY_RISK_PREMIUM` sem sufixo continuam existindo e continuam significando
@@ -592,7 +596,7 @@ suficiente para o leitor ver a origem de cada linha.
 | `config/br/filters.json` | o arquivo de hoje, movido por `git mv` |
 | `config/us/filters.json` | novo: mesmas chaves, `liq_media_diaria_bdr_min` no lugar de `liq_media_diaria_min`, `bank_filters` sem `dy_pct_min` |
 | `data/br/*` | os 3 arquivos de hoje, movidos por `mv` simples — `data/` está no `.gitignore`, nada ali é rastreado e `git mv` falharia com "not under version control" |
-| `.env.example` | `RISK_FREE_RATE_USD`, `EQUITY_RISK_PREMIUM_USD`, `BDR_REGION` |
+| `.env.example` | `RISK_FREE_RATE_USD`, `EQUITY_RISK_PREMIUM_USD`, `REGION` |
 | `analysis.ipynb` | pipeline da região `us` (ações e bancos), leitura por região, coluna `regiao`, concatenação para o ranking unificado |
 
 `src/bdrs.py` é o único módulo com lógica nova. Recebe uma região de varredura e devolve **dois

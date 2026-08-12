@@ -411,3 +411,91 @@ class TestMontarFrames:
         pares, _ = bdrs.montar_frames(aprovados)
 
         assert list(pares['ticker']) == ['AAPL', 'GOOGL']
+
+
+class TestCotacoesDoUniverso:
+    """
+    O tickers.csv guarda só identidade estável. Preço e liquidez são remontados
+    do universo de hoje a cada rodada — é o que impede o arquivo em cache de
+    carregar uma cotação de meses atrás como se fosse atual.
+    """
+
+    def _pares(self):
+        return pd.DataFrame({'ticker': ['AAPL', 'MSFT'],
+                             'ticker_bdr': ['AAPL34.SA', 'MSFT34.SA'],
+                             'razao': [20.0, 24.0], 'moeda': ['USD', 'USD']})
+
+    def _universo(self):
+        return [{'symbol': 'AAPL34.SA', 'regularMarketPrice': 78.64,
+                 'averageDailyVolume10Day': 468071}]
+
+    def test_colunas_sao_exatamente_as_de_cotacao(self):
+        out = bdrs._cotacoes_do_universo(self._pares(), self._universo())
+        assert list(out.columns) == ['ticker', 'preco_bdr', 'liq_media_diaria_bdr']
+
+    def test_liquidez_e_preco_vezes_volume(self):
+        out = bdrs._cotacoes_do_universo(self._pares(), self._universo())
+        aapl = out[out['ticker'] == 'AAPL'].iloc[0]
+        assert aapl['liq_media_diaria_bdr'] == pytest.approx(78.64 * 468071)
+
+    def test_par_ausente_do_universo_fica_nan(self):
+        # MSFT34 não está no universo de hoje: cotação NaN reprova no filtro de
+        # liquidez, que é melhor que aprovar com preço velho.
+        out = bdrs._cotacoes_do_universo(self._pares(), self._universo())
+        msft = out[out['ticker'] == 'MSFT'].iloc[0]
+        assert pd.isna(msft['preco_bdr'])
+        assert pd.isna(msft['liq_media_diaria_bdr'])
+
+    def test_universo_vazio_nao_quebra(self):
+        out = bdrs._cotacoes_do_universo(self._pares(), [])
+        assert len(out) == 2
+        assert out['preco_bdr'].isna().all()
+
+
+class TestObterPares:
+    def _prepara_cache(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(bdrs.paths, 'DATA_ROOT', tmp_path)
+        (tmp_path / 'us').mkdir()
+        pd.DataFrame({'ticker': ['AAPL'], 'ticker_bdr': ['AAPL34.SA'],
+                      'razao': [20.0], 'moeda': ['USD']}).to_csv(
+            tmp_path / 'us' / 'tickers.csv', index=False)
+        monkeypatch.setattr(bdrs, 'buscar_universo', lambda region: [
+            {'symbol': 'AAPL34.SA', 'shortName': 'APPLE       DRN',
+             'longName': 'Apple Inc.', 'regularMarketPrice': 78.64,
+             'averageDailyVolume10Day': 468071}])
+
+    def test_cache_nao_dispara_resolucao(self, tmp_path, monkeypatch):
+        # A resolução custa duas requisições por BDR. Com o cache no lugar ela
+        # não pode acontecer — é a razão de o cache existir.
+        self._prepara_cache(tmp_path, monkeypatch)
+
+        def _nao_deve_ser_chamado(*a, **k):
+            raise AssertionError('resolver_subjacente foi chamado com cache presente')
+        monkeypatch.setattr(bdrs, 'resolver_subjacente', _nao_deve_ser_chamado)
+
+        pares, _ = bdrs.obter_pares('us')
+
+        assert list(pares['ticker']) == ['AAPL']
+
+    def test_cache_ainda_assim_traz_cotacao_fresca(self, tmp_path, monkeypatch):
+        # Regressão do KeyError: sem cotação, o filtro de liquidez da região us
+        # quebra em toda rodada depois da primeira.
+        self._prepara_cache(tmp_path, monkeypatch)
+        monkeypatch.setattr(bdrs, 'resolver_subjacente', lambda *a, **k: None)
+
+        _, cotacoes = bdrs.obter_pares('us')
+
+        assert 'liq_media_diaria_bdr' in cotacoes.columns
+        assert cotacoes['liq_media_diaria_bdr'].iloc[0] == pytest.approx(78.64 * 468071)
+
+    def test_varre_sempre_a_bolsa_dos_bdrs_nao_a_regiao_pedida(self, tmp_path, monkeypatch):
+        # BDR é por definição listado em B3; a região pedida é a de DESTINO.
+        self._prepara_cache(tmp_path, monkeypatch)
+        vistas = []
+        monkeypatch.setattr(bdrs, 'buscar_universo',
+                            lambda region: vistas.append(region) or [])
+        monkeypatch.setattr(bdrs, 'resolver_subjacente', lambda *a, **k: None)
+
+        bdrs.obter_pares('us')
+
+        assert vistas == [bdrs.REGIAO_DOS_BDRS] == ['br']

@@ -2232,3 +2232,24 @@ git commit -m "feat: pipeline da regiao us no notebook, com ranking unificado"
 **Ponto de atenção na Task 12.** A célula de resolução é a única que faz ~1200 requisições (duas por BDR). Ela é pulada quando `data/us/tickers.csv` existe. Na primeira execução, contar com dezenas de minutos.
 
 **Correção pendente na spec.** A spec afirma que `fetch_betas` "ganha o índice como parâmetro", mas ele já tem `index_symbol='^BVSP'` desde antes — o que falta é `_fetch_fundamentals_from_api` repassá-lo, que é o que a Task 4 faz. Ajustar a linha correspondente da spec.
+
+---
+
+## Mudanças posteriores à execução deste plano
+
+O plano é o registro do que foi executado; estas mudanças vieram depois e o contradizem em pontos
+específicos. A spec é a fonte atual.
+
+- **`BDR_REGION` virou `REGION`**, com significado diferente: não é mais "a região varrida pelo
+  `yf.screen`" e sim "a região a analisar". A bolsa varrida para achar BDRs é sempre `br` e virou a
+  constante `bdrs.REGIAO_DOS_BDRS` — não é configuração, é definição do que é um BDR.
+- **O notebook roda UMA região por execução**, escolhida por `REGION`. As células separadas da
+  região `us` deixaram de existir: a aquisição de papéis passou a ser um `if/else` numa célula só,
+  e o ranking unificado BR+US saiu junto (as regiões se comparam lendo os dois
+  `valuation_history.csv`, que é onde a margem de segurança adimensional cumpre esse papel).
+- **A resolução dos BDRs saiu do notebook** para `bdrs.obter_pares(region)`, onde tem teste. Era o
+  trecho que produziu o único Critical do review final, e no notebook não havia cobertura nenhuma.
+- **`fundamentals.INDICE_POR_REGIAO`** passou a mapear região → índice de mercado do beta
+  (`br` → `^BVSP`, `us` → `^GSPC`), em vez de o índice ser passado à mão pelo notebook.
+- **`tests/conftest.py`** isola as premissas macro por moeda vindas do `.env`. Sem isso, seguir o
+  `.env.example` e definir `RISK_FREE_RATE_USD` com valor próprio deixava 8 testes vermelhos.

@@ -360,3 +360,123 @@ def montar_frames(aprovados: list[dict]) -> tuple[pd.DataFrame, pd.DataFrame]:
     cotacoes['liq_media_diaria_bdr'] = df['preco_bdr'] * df['volume_bdr']
 
     return pares, cotacoes
+
+
+# A bolsa onde os BDRs são negociados. É constante, não configuração: um BDR é
+# por definição um recibo listado em B3. A região que o usuário escolhe é a de
+# DESTINO — onde o ativo subjacente negocia —, e ela sai da bolsa de cada
+# subjacente resolvido, não de um parâmetro.
+REGIAO_DOS_BDRS = 'br'
+
+
+def _cotacoes_do_universo(pares: pd.DataFrame, universo: list[dict]) -> pd.DataFrame:
+    """
+    Cotações frescas do BDR para pares que vieram do cache.
+
+    O `tickers.csv` guarda só identidade estável; preço e liquidez são
+    voláteis por design e nunca são gravados lá, senão uma cotação de meses
+    atrás passaria por atual. Então são remontadas a partir do universo
+    buscado agora.
+
+    Par que sumiu do universo de hoje (saiu de listagem, ou caiu abaixo do
+    corte de valor de mercado) fica com cotação NaN de propósito: é o que o
+    reprova no filtro de liquidez, em vez de aprová-lo com preço velho.
+    """
+    do_pregao = pd.DataFrame([
+        {'ticker_bdr': q['symbol'],
+         'preco_bdr': q.get('regularMarketPrice'),
+         'volume_bdr': q.get('averageDailyVolume10Day')}
+        for q in universo
+    ], columns=['ticker_bdr', 'preco_bdr', 'volume_bdr'])
+
+    cotacoes = pares[['ticker', 'ticker_bdr']].merge(
+        do_pregao, on='ticker_bdr', how='left')
+    cotacoes['liq_media_diaria_bdr'] = (
+        cotacoes['preco_bdr'] * cotacoes['volume_bdr'])
+    return cotacoes[['ticker', 'preco_bdr', 'liq_media_diaria_bdr']]
+
+
+def obter_pares(region: str, delay: float = 0.3,
+                buscar_info=None) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Pares (subjacente, BDR) da região, com as cotações do BDR de hoje.
+
+    Os pares são estáveis e ficam em cache em `data/<region>/tickers.csv`; a
+    resolução que os produz custa duas requisições por BDR e só roda quando o
+    cache não existe. As cotações são refeitas em toda chamada, nos dois
+    caminhos — é o que impede o arquivo estável de carregar preço velho.
+
+    Args:
+        region: região de destino (onde o subjacente negocia).
+        delay: espera entre requisições na resolução.
+        buscar_info: injetável nos testes; por padrão lê o `.info` do yfinance.
+
+    Returns:
+        (pares, cotacoes) — `pares` com ticker/ticker_bdr/razao/moeda,
+        `cotacoes` com ticker/preco_bdr/liq_media_diaria_bdr.
+    """
+    if buscar_info is None:
+        def buscar_info(ticker):
+            return yf.Ticker(ticker).info or {}
+
+    universo = selecionar_bdrs(buscar_universo(region=REGIAO_DOS_BDRS))
+    print(f"[bdrs] {len(universo)} BDRs no universo de {REGIAO_DOS_BDRS}")
+
+    cache = paths.data_file(region, 'tickers.csv')
+    if cache.exists():
+        pares = pd.read_csv(cache)
+        print(f"[bdrs] {len(pares)} pares carregados do cache ({cache})")
+        cotacoes = _cotacoes_do_universo(pares, universo)
+        sem_cotacao = int(cotacoes['preco_bdr'].isna().sum())
+        if sem_cotacao:
+            print(f"[bdrs]   {sem_cotacao} par(es) sem cotação fresca no "
+                  f"universo de hoje — reprovam na liquidez")
+        return pares, cotacoes
+
+    candidatos, descartes = [], {'sem_candidato': 0}
+    for q in universo:
+        subjacente = resolver_subjacente(q['longName'])
+        if subjacente is None:
+            descartes['sem_candidato'] += 1
+            continue
+        info = buscar_info(subjacente)
+        candidatos.append({
+            'ticker': subjacente,
+            'ticker_bdr': q['symbol'],
+            'razao': razao_acoes_do_par(q.get('sharesOutstanding'),
+                                        info.get('sharesOutstanding')),
+            'preco_bdr': q.get('regularMarketPrice'),
+            'volume_bdr': q.get('averageDailyVolume10Day'),
+            'preco_subjacente': info.get('currentPrice'),
+            'moeda_pregao': info.get('currency'),
+            'moeda': info.get('financialCurrency'),
+            'regiao': regiao_do_ticker(subjacente),
+        })
+        time.sleep(delay)
+
+    aprovados, descartes_portao = aprovar_pelo_portao(candidatos)
+    descartes.update(descartes_portao)
+
+    elegiveis = []
+    for a in aprovados:
+        motivo = motivo_inelegibilidade(a['moeda_pregao'], a['moeda'],
+                                        a['regiao'], regioes_pedidas={region})
+        if motivo:
+            descartes[motivo] = descartes.get(motivo, 0) + 1
+            continue
+        elegiveis.append(a)
+
+    da_regiao = [e for e in elegiveis if e['regiao'] == region]
+    pares, cotacoes = montar_frames(da_regiao)
+
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    pares.to_csv(cache, index=False)
+
+    print(f"[bdrs] {len(pares)} pares aprovados de {len(universo)} BDRs")
+    for motivo, n in sorted(descartes.items()):
+        print(f"[bdrs]   descartados por {motivo}: {n}")
+    # A taxa medida no desenho (21/22) valeu só para bolsas americanas; para as
+    # demais praças é desconhecida, e este resumo é o que a revela.
+    print(resumo_por_regiao(candidatos, elegiveis).to_string(index=False))
+
+    return pares, cotacoes
