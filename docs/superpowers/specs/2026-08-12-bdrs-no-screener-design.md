@@ -73,29 +73,44 @@ amostra aleatória de 22 BDRs (semente 7) resolveu 22/22 com candidato — mas u
 Na direção inversa a busca é pior ainda: procurando o BDR a partir do nome, ela achou `AAPL34.SA`,
 `JPMC34.SA`, `MELI34.SA` e `C1TA34.SA`, mas **perdeu** `NFLX34.SA` e `ROXO34.SA`, que existem.
 
-O que torna a resolução utilizável é haver duas medidas independentes da razão do BDR:
+O que torna a resolução utilizável é a razão do BDR ser mensurável por dois caminhos que não
+compartilham nenhum campo. Pelas ações, ela sai direto:
 
 ```
 razao_acoes = sharesOutstanding(BDR) / sharesOutstanding(US)
-razao_preco = preco(US) / (preco(BDR) / cambio)
 ```
 
-Medição de 2026-08-12 sobre 13 pares conhecidos:
+Pelos preços, o que sai é a cotação do dólar que o par **implica**:
 
-| BDR | US | razão por ações | razão por preço | desvio |
+```
+fx_implicito = razao_acoes × preco(BDR) / preco(US)
+```
+
+Num par correto, esse número é o câmbio de mercado. Num par errado, é um valor sem sentido — e o
+teste é que todos os pares do universo têm que implicar aproximadamente o mesmo dólar.
+
+Medição de 2026-08-12 (dólar de mercado no mesmo instante: 5,1678):
+
+| BDR | US | razão por ações | dólar implícito | desvio da mediana |
 |---|---|---|---|---|
-| AAPL34 | AAPL | 20,000 | 19,996 | −0,02% |
-| MSFT34 | MSFT | 24,000 | 24,002 | +0,01% |
-| GOGL34 | GOOGL | 12,000 | 12,003 | +0,02% |
-| MELI34 | MELI | 120,000 | 119,952 | −0,04% |
-| NFLX34 | NFLX | 50,000 | 49,864 | −0,27% |
-| XPBR31 | XP | 1,000 | 0,989 | −1,05% |
+| AAPL34 | AAPL | 20,000 | 5,1848 | 0,03% |
+| GOGL34 | GOOGL | 12,000 | 5,1820 | 0,03% |
+| XPBR31 | XP | 1,000 | 5,1814 | 0,04% |
+| NFLX34 | NFLX | 50,000 | 5,1688 | 0,28% |
+| JPMC34 | JPM | 10,000 | 5,1510 | 0,63% |
+| MELI34 | MELI | 120,000 | 5,2690 | 1,65% |
+| **FMXB34** | **VIST** | **0,615** | **5,9635** | **15,05%** |
 
-A razão por ações cai em inteiro exato, e a razão por preço confirma o mesmo número por um caminho
-que não compartilha nenhum campo com o primeiro. Um mapeamento errado desalinha as duas: o par
-`FMXB34 → VIST` produziu razão 0,615 (não-inteira) com 11,9% de desvio, e foi rejeitado.
+A mediana dos implícitos ficou em 5,1834, a 0,3% do dólar de mercado — diferença compatível com os
+15 minutos de atraso da cotação do BDR. Os pares corretos ficam todos abaixo de 1,7%. O par errado
+`FMXB34 → VIST` (Fomento Económico Mexicano casado com Vista Energy) falha duas vezes: razão de
+ações não-inteira e dólar implícito 15% fora.
 
 Com o portão aplicado, a amostra de 22 aprovou 21 e rejeitou exatamente o par errado.
+
+**A mediana é calibrada pelo próprio universo, não por uma cotação externa.** Isso é deliberado:
+o portão continua funcionando com o dólar em qualquer patamar, sem depender de nenhum valor
+configurado estar atualizado (ver "Cotação do dólar").
 
 ## Arquitetura
 
@@ -111,7 +126,8 @@ yf.screen(region=BDR_REGION)          944 papéis (mcap > 500M, medição de 202
         ▼
    ┌─── PORTÃO DE QUALIDADE ─────────────────────┐
    │  razao_acoes inteira (tolerância ±0,02)     │
-   │  |razao_preco / razao_acoes − 1| < 3%       │
+   │  fx_implicito a menos de 3% da mediana      │
+   │  do universo (auto-calibrado)               │
    └─────────────────────────────────────────────┘
         │ aprovado                      │ rejeitado
         ▼                               ▼
@@ -125,7 +141,7 @@ yf.screen(region=BDR_REGION)          944 papéis (mcap > 500M, medição de 202
         │
         ▼  valuation em US$ (RF e ERP americanos, beta vs ^GSPC)
         │
-        ▼  preco_justo_bdr = preco_justo(US$) × cambio ÷ razao
+        ▼  preco_justo_bdr = preco_justo(US$) × USD_BRL_RATE ÷ razao
 ```
 
 ### Identificação do BDR
@@ -151,17 +167,20 @@ busca pelo ticker americano.
 
 ### Portão de qualidade
 
-Um BDR entra na lista somente se as duas razões concordarem. Sem par resolvido, ou com par
+Um BDR entra na lista somente se as duas medidas concordarem. Sem par resolvido, ou com par
 reprovado, o papel **não entra nem com dado parcial**.
 
 É a Guideline 4 aplicada ao mapeamento. Um par errado não produz um erro visível: produz um preço
 justo com aparência de calculado, sobre outra empresa. `FMXB34` avaliado como Vista Energy sairia
 com número, unidade e formatação corretos, e chegaria ao usuário como recomendação.
 
-A tolerância de 3% e a de ±0,02 no inteiro vêm de premissa, não de ajuste à amostra: o desvio entre
-as duas razões é dominado por defasagem de cotação (o BDR tem 15 minutos de atraso, e o câmbio é
-outro instante), e 3% é folga confortável para descasamento intradiário sem acomodar erro de
-identidade — o par errado medido deu 11,9%, quase quatro vezes o limite.
+A tolerância de 3% e a de ±0,02 no inteiro vêm de premissa, não de ajuste à amostra: o desvio do
+dólar implícito é dominado por defasagem de cotação — o BDR tem 15 minutos de atraso e a ação
+americana é outro instante — e 3% é folga confortável para descasamento intradiário sem acomodar
+erro de identidade. O par errado medido deu 15%, cinco vezes o limite.
+
+A mediana é calculada sobre os pares que já passaram no teste da razão inteira, para que um punhado
+de pares errados não desloque a referência.
 
 ### Onde os dados ficam
 
@@ -234,6 +253,7 @@ Novas variáveis no `.env`, seguindo o padrão das existentes:
 # --- Macro em US$ (BDRs) ---
 RISK_FREE_RATE_USD=0.042        # Treasury longo. Default: 0.042
 EQUITY_RISK_PREMIUM_USD=0.045   # Prêmio de risco EUA. Default: 0.045
+USD_BRL_RATE=5.17               # Cotação do dólar. Default: 5.17 (de 2026-08-12)
 ```
 
 `TERMINAL_GROWTH_USD` segue a regra existente (`= RISK_FREE_RATE`), ficando em ~4,2%. A regra
@@ -252,15 +272,41 @@ O retorno do BDR em reais embute a variação do dólar. Usá-lo colocaria risco
 beta, enquanto o fluxo descontado é em dólar e a conversão só acontece no fim. Misturar as duas
 coisas contaria o câmbio duas vezes.
 
+### Cotação do dólar
+
+`USD_BRL_RATE` é lida do `.env` por `_env_float`, como as demais premissas macro, com **5,17** de
+default — a cotação de 2026-08-12, data desta spec.
+
+Vale registrar por que ela fica no `.env` mesmo sendo um dado que o yfinance **fornece**
+(`USDBRL=X` responde normalmente), ao contrário da convenção declarada no cabeçalho do
+`.env.example`. Três motivos:
+
+1. **Reprodutibilidade do snapshot.** O histórico grava `fx_usdbrl` junto com RF e ERP como
+   premissa da rodada. Com a cotação vindo da rede, duas execuções no mesmo dia gravam preços
+   justos diferentes sem que nenhuma premissa tenha mudado.
+2. **É premissa, não medição.** Converter um preço justo de 10 anos de fluxo pelo dólar de um
+   instante já é uma escolha; deixá-la explícita permite rodar cenário ("e se o dólar for a 6?")
+   editando uma linha.
+3. **Remove um modo de falha.** A cotação era o único ponto do pipeline capaz de derrubar todos os
+   BDRs por indisponibilidade de rede.
+
+**O portão de qualidade não usa esse valor.** Ele se calibra pela mediana dos dólares implícitos do
+próprio universo. Isso importa: se o portão dependesse de `USD_BRL_RATE` e o dólar de mercado
+andasse mais que 3% desde a última vez que você editou o `.env`, **todos** os pares passariam a
+desviar acima da tolerância e o screener rejeitaria o universo inteiro — uma falha total disparada
+por um valor desatualizado, e que se pareceria com "nenhum BDR passou nos critérios". Separando as
+duas coisas, uma cotação velha no `.env` erra apenas o valor em R$ exibido, proporcionalmente e de
+forma auditável pela coluna `fx_usdbrl` do snapshot.
+
 ### Conversão, num lugar só
 
 ```
-preco_justo_bdr(R$) = preco_justo(US$) × fx_usdbrl ÷ razao
+preco_justo_bdr(R$) = preco_justo(US$) × USD_BRL_RATE ÷ razao
 ```
 
 A margem de segurança é invariante ao câmbio: `justo / preco − 1` dá o mesmo número calculado em
-dólar ou em real, porque o `fx` aparece nos dois termos. O câmbio do dia move o valor exibido em
-R$, nunca a decisão.
+dólar ou em real, porque o `fx` aparece nos dois termos. Uma cotação desatualizada no `.env` move o
+valor exibido em R$, nunca a decisão nem o ranking.
 
 Os limiares de projetabilidade (`MAX_PROJECTABLE_GROWTH`, `MIN_TREND_R2`) não mudam: respondem
 "consigo projetar essa taxa por 10 anos?", pergunta que não tem moeda.
@@ -301,7 +347,7 @@ mudança de exibição e não de modelo.
 | `src/valuation.py` | premissas macro por balde; conversão do preço justo; snapshot com `fx_usdbrl` e `razao` |
 | `src/filters.py` | `apply_bdr_filters`, lendo `bdr_filters` / `bdr_bank_filters` |
 | `config/filters.json` | dois blocos novos |
-| `.env.example` | `RISK_FREE_RATE_USD`, `EQUITY_RISK_PREMIUM_USD`, `BDR_REGION` |
+| `.env.example` | `RISK_FREE_RATE_USD`, `EQUITY_RISK_PREMIUM_USD`, `USD_BRL_RATE`, `BDR_REGION` |
 | `analysis.ipynb` | terceiro balde, `tipo = 'bdr'`, na união da célula 13 |
 
 `src/bdrs.py` é o único módulo com lógica nova. Sua fronteira é estreita: recebe uma região,
@@ -317,9 +363,10 @@ Nenhuma falha de rede ou de dado pode derrubar a coleta, seguindo o padrão já 
 |---|---|
 | `yf.screen` falha | erro propagado — sem universo não há o que fazer, e falhar em silêncio produziria lista vazia indistinguível de "nada passou" |
 | `yf.Search` falha ou não devolve candidato | BDR descartado, motivo no log |
-| razão não-inteira ou desvio acima da tolerância | BDR descartado, motivo e os dois valores no log |
+| razão não-inteira, ou dólar implícito fora da tolerância | BDR descartado, motivo e os dois valores no log |
+| menos de 3 pares sobrevivem ao teste da razão inteira | mediana não é referência confiável com amostra minúscula; nenhum BDR entra, com aviso explícito distinguindo isso de "nada passou nos filtros" |
 | `.info` do ticker americano vazio | linha com NaN, como já acontece hoje |
-| cotação do câmbio indisponível | erro propagado — sem câmbio nenhum preço justo de BDR é conversível |
+| `USD_BRL_RATE` ausente do `.env` | usa o default de 5,17, como `_env_float` já faz com RF e ERP |
 
 A contagem de descartes por motivo é impressa ao fim da resolução, no mesmo formato das mensagens
 `[filters]` existentes.
@@ -331,13 +378,21 @@ construídos à mão — nunca sobre o cache, pela Guideline 3.
 
 **`src/bdrs.py`**
 - marcador `DR[N123]` aceita `DRN`, `DR1`, `DR2`, `DR3` e rejeita `ON NM`, `PN`, `CI`
-- portão aprova razões concordantes; rejeita razão não-inteira; rejeita desvio acima da tolerância
+- portão aprova pares concordantes; rejeita razão não-inteira; rejeita dólar implícito fora da
+  tolerância
 - fronteira da tolerância: desvio exatamente no limite, logo abaixo e logo acima
+- a mediana ignora os pares já reprovados pela razão inteira — um lote de pares errados não desloca
+  a referência
+- **o portão não lê `USD_BRL_RATE`**: com a variável fixada num valor absurdo, o mesmo conjunto de
+  pares é aprovado. É o teste que trava a separação descrita em "Cotação do dólar"
+- universo com menos de 3 pares válidos não aprova ninguém, e o aviso é distinguível de "nada
+  passou nos filtros"
 - BDR sem candidato não aparece na saída
 - reprovado não aparece na saída **com dado parcial** — a asserção é sobre ausência da linha
 
 **`src/valuation.py`**
-- conversão: `justo(US$) × fx ÷ razao` com valores conhecidos
+- conversão: `justo(US$) × USD_BRL_RATE ÷ razao` com valores conhecidos
+- `USD_BRL_RATE` ausente cai no default; valor inválido cai no default com aviso, como `_env_float`
 - margem de segurança idêntica calculada em US$ e em R$ (invariância ao câmbio)
 - premissas por balde: snapshot de linha `bdr` grava RF/ERP em dólar; linha `ação` grava em reais;
   as duas no mesmo `append_snapshot`
