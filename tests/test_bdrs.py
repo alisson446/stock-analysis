@@ -278,12 +278,39 @@ class TestMotivoInelegibilidade:
         with pytest.raises(FileNotFoundError):
             bdrs.motivo_inelegibilidade('USD', 'USD', 'us', {'us'})
 
+    def test_sufixo_sem_regiao_conhecida_exclui_so_o_papel(self, tmp_path,
+                                                           monkeypatch):
+        # Um ticker de LSE IOB (.IL) negocia e reporta em dólar, então chega
+        # até aqui com as duas moedas iguais. O sentinela de região não é um
+        # código válido de pasta: sem esta saída ele chegava em `paths` e a
+        # exceção derrubava a rodada inteira por causa de um papel.
+        monkeypatch.setattr(bdrs.paths, 'CONFIG_ROOT', tmp_path)
+        regiao = bdrs.regiao_do_ticker('BP.IL')
+
+        motivo = bdrs.motivo_inelegibilidade('USD', 'USD', regiao, {'us'})
+
+        assert motivo == 'regiao_sem_config'
+
+    def test_papel_de_sufixo_desconhecido_nao_derruba_os_outros(self, tmp_path,
+                                                                monkeypatch):
+        monkeypatch.setattr(bdrs.paths, 'CONFIG_ROOT', tmp_path)
+        (tmp_path / 'us').mkdir()
+        (tmp_path / 'us' / 'filters.json').write_text('{}')
+        pares = [('AAPL', 'USD'), ('BP.IL', 'USD'), ('JPM', 'USD')]
+
+        elegiveis = [t for t, moeda in pares
+                     if bdrs.motivo_inelegibilidade(
+                         moeda, moeda, bdrs.regiao_do_ticker(t), {'us'}) is None]
+
+        assert elegiveis == ['AAPL', 'JPM']
+
 
 class TestRegiaoDoTicker:
     @pytest.mark.parametrize('ticker,esperado', [
         ('AAPL', 'us'), ('JPM', 'us'), ('PETR4.SA', 'br'),
         ('AZN.L', 'gb'), ('SAP.DE', 'de'), ('7203.T', 'jp'),
-        ('XXXX.ZZ', 'desconhecida'),
+        ('XXXX.ZZ', bdrs.REGIAO_DESCONHECIDA),
+        ('BP.IL', bdrs.REGIAO_DESCONHECIDA),
     ])
     def test_sufixo_decide_a_regiao(self, ticker, esperado):
         assert bdrs.regiao_do_ticker(ticker) == esperado
@@ -342,3 +369,45 @@ class TestMontarFrames:
         pares, cotacoes = bdrs.montar_frames(self._aprovado())
         comuns = set(pares.columns) & set(cotacoes.columns)
         assert comuns == {'ticker'}
+
+    def _dois_recibos_da_alphabet(self):
+        # GOGL34 e GOGL35 compartilham o longName 'Alphabet Inc.', resolvem
+        # para o mesmo subjacente e podem passar os dois no portão.
+        base = {'ticker': 'GOOGL', 'razao': 12.0, 'moeda': 'USD',
+                'preco_subjacente': 200.0, 'moeda_pregao': 'USD'}
+        return [{**base, 'ticker_bdr': 'GOGL34.SA', 'preco_bdr': 80.0,
+                 'volume_bdr': 100_000},
+                {**base, 'ticker_bdr': 'GOGL35.SA', 'preco_bdr': 81.0,
+                 'volume_bdr': 5_000}]
+
+    def test_subjacente_repetido_sai_uma_vez_so(self):
+        # Quem consome junta os frames por `ticker`: dois pares da mesma
+        # empresa viram quatro linhas, cada preço casado com o recibo errado,
+        # e o ranking conta a empresa duas vezes.
+        pares, cotacoes = bdrs.montar_frames(self._dois_recibos_da_alphabet())
+
+        assert list(pares['ticker']) == ['GOOGL']
+        assert list(cotacoes['ticker']) == ['GOOGL']
+
+    def test_par_mantido_fica_coerente_entre_os_dois_frames(self):
+        pares, cotacoes = bdrs.montar_frames(self._dois_recibos_da_alphabet())
+
+        assert pares['ticker_bdr'].iloc[0] == 'GOGL34.SA'
+        assert cotacoes['preco_bdr'].iloc[0] == pytest.approx(80.0)
+        assert cotacoes['liq_media_diaria_bdr'].iloc[0] == pytest.approx(
+            80.0 * 100_000)
+
+    def test_colisao_descartada_e_impressa(self, capsys):
+        # Jogar fora um mapeamento em silêncio é pior que dizer qual foi.
+        bdrs.montar_frames(self._dois_recibos_da_alphabet())
+
+        saida = capsys.readouterr().out
+        assert 'GOOGL' in saida
+        assert 'GOGL35.SA' in saida
+
+    def test_subjacentes_distintos_nao_sao_afetados(self):
+        aprovados = self._aprovado() + self._dois_recibos_da_alphabet()
+
+        pares, _ = bdrs.montar_frames(aprovados)
+
+        assert list(pares['ticker']) == ['AAPL', 'GOOGL']

@@ -220,7 +220,7 @@ def motivo_inelegibilidade(moeda_pregao: str, moeda_balanco: str, regiao: str,
     - `moeda_sem_premissas`: sem juro livre de risco e prêmio de risco daquela
       moeda não existe taxa de desconto.
     - `regiao_sem_config`: o subjacente caiu numa região que não tem
-      `config/<r>/filters.json`.
+      `config/<r>/filters.json`, ou numa bolsa cujo sufixo nem região tem.
 
     A última distingue região PEDIDA de região DESCOBERTA. Se você pediu a
     região, a falta do arquivo é erro — filtrar por defaults que ninguém
@@ -233,6 +233,16 @@ def motivo_inelegibilidade(moeda_pregao: str, moeda_balanco: str, regiao: str,
 
     if macro_for(moeda_balanco) is None:
         return 'moeda_sem_premissas'
+
+    # Sufixo de bolsa fora do mapa: sai por aqui ANTES de tocar em `paths`, que
+    # rejeita o sentinela por não ser um código de região. Uma listagem de
+    # Londres em dólar (`.IL`) chega até aqui com as duas moedas iguais, e sem
+    # esta saída a exceção escaparia e derrubaria a rodada inteira por causa de
+    # um papel — exatamente o que a separação pedida/descoberta existe para
+    # evitar. Sem código de região não há pasta de config, então o tratamento é
+    # o mesmo de região descoberta sem `filters.json`.
+    if regiao == REGIAO_DESCONHECIDA:
+        return 'regiao_sem_config'
 
     if not paths.filters_file(regiao).exists():
         if regiao in regioes_pedidas:
@@ -254,12 +264,17 @@ _REGIAO_POR_SUFIXO = {
     'T': 'jp', 'AX': 'au', 'TO': 'ca', 'HK': 'hk', 'MX': 'mx',
 }
 
+# Sufixo fora do mapa. NÃO é um código de região — é um sentinela, e por isso
+# nunca pode virar segmento de caminho: quem o recebe exclui o papel.
+REGIAO_DESCONHECIDA = 'desconhecida'
+
 
 def regiao_do_ticker(ticker: str) -> str:
     """Região da bolsa em que o ticker negocia, pelo sufixo do símbolo."""
     if '.' not in ticker:
         return 'us'
-    return _REGIAO_POR_SUFIXO.get(ticker.rsplit('.', 1)[1].upper(), 'desconhecida')
+    return _REGIAO_POR_SUFIXO.get(ticker.rsplit('.', 1)[1].upper(),
+                                  REGIAO_DESCONHECIDA)
 
 
 def razao_acoes_do_par(shares_bdr: float, shares_subjacente: float) -> float:
@@ -307,6 +322,9 @@ def montar_frames(aprovados: list[dict]) -> tuple[pd.DataFrame, pd.DataFrame]:
     carregar uma cotação velha que ninguém sabe que está velha. As cotações são
     recoletadas a cada rodada e mescladas no `fundamentals.csv` por `ticker`.
 
+    Cada subjacente sai uma vez só nos dois frames: é `ticker` que junta os
+    dois lá na frente, e repetição vira linha duplicada da mesma empresa.
+
     Returns:
         (pares, cotacoes) — o primeiro vai para data/<r>/tickers.csv.
     """
@@ -316,6 +334,23 @@ def montar_frames(aprovados: list[dict]) -> tuple[pd.DataFrame, pd.DataFrame]:
         return vazio_pares, vazio_cot
 
     df = pd.DataFrame(aprovados)
+
+    # Uma empresa pode ter mais de um recibo: GOGL34 e GOGL35 compartilham o
+    # longName 'Alphabet Inc.', resolvem para o mesmo subjacente e podem passar
+    # os dois no portão. Quem consome junta os frames por `ticker`, então dois
+    # pares da mesma empresa viram quatro linhas — cada preço de BDR casado com
+    # o recibo errado — e o ranking conta a empresa duas vezes.
+    #
+    # Fica o primeiro, e os descartados são impressos: jogar fora um mapeamento
+    # em silêncio é pior que dizer qual foi. Escolher "o melhor" recibo exigiria
+    # um critério (liquidez? patrocínio?) que ninguém pediu — e os dois apontam
+    # para a mesma empresa, que é o dado que importa aqui.
+    duplicados = df[df.duplicated('ticker', keep='first')]
+    for ticker, grupo in duplicados.groupby('ticker'):
+        print(f"[bdrs] {ticker}: mais de um BDR resolveu para o mesmo "
+              f"subjacente; descartados {sorted(grupo['ticker_bdr'])}")
+    df = df.drop_duplicates('ticker', keep='first').reset_index(drop=True)
+
     pares = df[['ticker', 'ticker_bdr', 'razao', 'moeda']].copy()
 
     cotacoes = df[['ticker', 'preco_bdr']].copy()
