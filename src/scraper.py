@@ -5,8 +5,7 @@ import yfinance as yf
 import time
 from pathlib import Path
 
-DATA_DIR = Path(__file__).resolve().parent.parent / 'data'
-TICKERS_CACHE = DATA_DIR / 'tickers.csv'
+from src import paths
 
 # Tickers bancários conhecidos (fallback para classificação)
 KNOWN_BANK_TICKERS = {
@@ -26,20 +25,31 @@ BANK_INDUSTRIES = {
 }
 
 
-def get_tickers(force_refresh: bool = False) -> pd.DataFrame:
+def get_tickers(force_refresh: bool = False, region: str = 'br') -> pd.DataFrame:
     """
-    Retorna DataFrame de tickers. Usa cache local (data/tickers.csv) se existir.
-    Se não existir ou force_refresh=True, faz scraping e salva o resultado.
+    Retorna DataFrame de tickers da região. Usa cache local
+    (data/<region>/tickers.csv) se existir. Se não existir ou
+    force_refresh=True, faz scraping e salva o resultado.
+
+    O scraping só existe para a região 'br' — as demais são populadas por
+    outros caminhos (a região 'us' vem de src/bdrs.py). Pedir refresh de uma
+    região sem scraper é erro explícito em vez de arquivo vazio.
     """
-    if not force_refresh and TICKERS_CACHE.exists():
-        df = pd.read_csv(TICKERS_CACHE)
-        print(f"[scraper] {len(df)} tickers carregados do cache ({TICKERS_CACHE})")
+    cache = paths.data_file(region, 'tickers.csv')
+    if not force_refresh and cache.exists():
+        df = pd.read_csv(cache)
+        print(f"[scraper] {len(df)} tickers da região {region} carregados do cache ({cache})")
         return df
 
-    return _scrape_tickers()
+    if region != 'br':
+        raise ValueError(
+            f"não há scraper para a região {region!r}. Popule "
+            f"{cache} pelo pipeline da região (ex.: src/bdrs.py para 'us')."
+        )
+    return _scrape_tickers(cache)
 
 
-def _scrape_tickers() -> pd.DataFrame:
+def _scrape_tickers(cache: Path) -> pd.DataFrame:
     """Scrape stock tickers from dadosdemercado.com.br/acoes e salva em cache."""
     url = 'https://www.dadosdemercado.com.br/acoes'
     headers = {
@@ -78,11 +88,10 @@ def _scrape_tickers() -> pd.DataFrame:
         'ticker_sa': [f'{t}.SA' for t in unique_tickers],
     })
 
-    # Salvar cache
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    df.to_csv(TICKERS_CACHE, index=False)
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(cache, index=False)
 
-    print(f"[scraper] {len(df)} tickers obtidos de dadosdemercado.com.br (salvo em {TICKERS_CACHE})")
+    print(f"[scraper] {len(df)} tickers obtidos de dadosdemercado.com.br (salvo em {cache})")
     return df
 
 
