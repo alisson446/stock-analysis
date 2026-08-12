@@ -1,9 +1,13 @@
-# BDRs no screener: fundamento americano, preço brasileiro
+# BDRs no screener: fundamento estrangeiro, na moeda de origem
 
 **Data:** 2026-08-12
 **Escopo:** novo balde de ativos (BDR) percorrendo o pipeline inteiro — universo, coleta, filtros,
 valuation e snapshot. Não altera o comportamento das ações e bancos brasileiros, exceto por uma
-refatoração das premissas macro (ver "Premissas por balde"), necessária para o histórico não mentir.
+refatoração das premissas macro (ver "Premissas por moeda"), necessária para o histórico não mentir.
+
+**Decisão estruturante: nenhuma conversão de moeda acontece em lugar nenhum.** Cada ativo é
+coletado, avaliado e exibido na moeda do seu próprio balanço. É o que torna o desenho válido para
+qualquer país sem multiplicar caminhos de erro.
 
 ## Objetivo
 
@@ -48,8 +52,8 @@ razão documentada.
 
 **Corolário:** os indicadores adimensionais do BDR (P/VP, ROE, margens, DL/EBIT, DL/PL,
 passivos/ativos, liquidez corrente) estão corretos, porque são US$ ÷ US$ e o câmbio se cancela. O
-que quebra é tudo que cruza preço em R$ com valor absoluto em US$: P/L, LPA, dívida líquida, EBIT,
-FCF — e, por consequência, o DCF inteiro.
+que quebra é tudo que cruza preço com valor absoluto em outra moeda: P/L, LPA, dívida líquida,
+EBIT, FCF — e, por consequência, o DCF inteiro.
 
 ## Descoberta 2: `yf.screen(region='us')` não enumera o mercado americano
 
@@ -77,21 +81,21 @@ O que torna a resolução utilizável é a razão do BDR ser mensurável por doi
 compartilham nenhum campo. Pelas ações, ela sai direto:
 
 ```
-razao_acoes = sharesOutstanding(BDR) / sharesOutstanding(US)
+razao_acoes = sharesOutstanding(BDR) / sharesOutstanding(subjacente)
 ```
 
-Pelos preços, o que sai é a cotação do dólar que o par **implica**:
+Pelos preços, o que sai é a cotação que o par **implica**:
 
 ```
-fx_implicito = razao_acoes × preco(BDR) / preco(US)
+fx_implicito = razao_acoes × preco(BDR) / preco(subjacente)
 ```
 
 Num par correto, esse número é o câmbio de mercado. Num par errado, é um valor sem sentido — e o
-teste é que todos os pares do universo têm que implicar aproximadamente o mesmo dólar.
+teste é que todos os pares do universo têm que implicar aproximadamente a mesma cotação.
 
 Medição de 2026-08-12 (dólar de mercado no mesmo instante: 5,1678):
 
-| BDR | US | razão por ações | dólar implícito | desvio da mediana |
+| BDR | subjacente | razão por ações | cotação implícita | desvio da mediana |
 |---|---|---|---|---|
 | AAPL34 | AAPL | 20,000 | 5,1848 | 0,03% |
 | GOGL34 | GOOGL | 12,000 | 5,1820 | 0,03% |
@@ -104,17 +108,44 @@ Medição de 2026-08-12 (dólar de mercado no mesmo instante: 5,1678):
 A mediana dos implícitos ficou em 5,1834, a 0,3% do dólar de mercado — diferença compatível com os
 15 minutos de atraso da cotação do BDR. Os pares corretos ficam todos abaixo de 1,7%. O par errado
 `FMXB34 → VIST` (Fomento Económico Mexicano casado com Vista Energy) falha duas vezes: razão de
-ações não-inteira e dólar implícito 15% fora.
+ações não-inteira e cotação implícita 15% fora.
 
 Com o portão aplicado, a amostra de 22 aprovou 21 e rejeitou exatamente o par errado.
 
-**A mediana é calibrada pelo próprio universo, não por uma cotação externa.** Isso é deliberado:
-o portão continua funcionando com o dólar em qualquer patamar, sem depender de nenhum valor
-configurado estar atualizado (ver "Cotação do dólar").
+**O portão não converte nada e não lê cotação nenhuma.** Ele deriva a cotação implícita e a compara
+com a mediana do próprio universo. Por isso continua válido sob a decisão de não haver conversão de
+moeda, e funciona com qualquer moeda de pregão do subjacente — desde que a mediana seja calculada
+**por moeda de pregão**, não sobre o universo inteiro (ver "Portão de qualidade").
+
+## Descoberta 4: moeda do pregão e moeda do balanço divergem com frequência
+
+Medição de 2026-08-12 sobre 10 papéis estrangeiros:
+
+| ticker | `currency` | `financialCurrency` | estimativas |
+|---|---|---|---|
+| `UBS`, `YPF` (ADR) | USD | USD | 4 linhas |
+| **`UL`** (ADR Unilever) | **USD** | **EUR** | 4 linhas |
+| **`TSM`** (ADR TSMC) | **USD** | **TWD** | 4 linhas |
+| `NESN.SW` | CHF | CHF | 4 linhas |
+| `SAP.DE`, `MC.PA` | EUR | EUR | 4 linhas |
+| `7203.T` | JPY | JPY | 4 linhas |
+| **`AZN.L`** | **GBp** | **USD** | 4 linhas |
+| **`BHP.AX`** | **AUD** | **USD** | 4 linhas |
+
+**Cobertura de analistas não é privilégio americano.** Os 10 papéis trouxeram `earnings_estimate`
+completo, incluindo Tóquio, Paris, Zurique e Sydney. O buraco da Descoberta 1 era do ticker do BDR,
+não de papel estrangeiro.
+
+**"ADR em dólar" não garante balanço em dólar.** `UL` negocia em USD e reporta em EUR; `TSM`
+negocia em USD e reporta em TWD. O P/L recalculado desses dois quebraria exatamente como o do
+`AAPL34.SA`.
+
+**`AZN.L` cota em `GBp`, não em `GBP`** — pence, centésimo de libra. Tratar como libra erra por
+100x.
 
 ## Arquitetura
 
-**Em uma frase: o BDR é o preço; a ação americana é a empresa.**
+**Em uma frase: o BDR é o ticker negociável; o subjacente é a empresa, na moeda dela.**
 
 ```
 yf.screen(region=BDR_REGION)          944 papéis (mcap > 500M, medição de 2026-08-12)
@@ -122,26 +153,32 @@ yf.screen(region=BDR_REGION)          944 papéis (mcap > 500M, medição de 202
         ▼
    312 BDRs                            data/bdrs.csv (cache, padrão do data/tickers.csv)
         │
-        │  yf.Search(longName) → candidato em bolsa americana
+        │  yf.Search(longName) → candidato em bolsa estrangeira
         ▼
    ┌─── PORTÃO DE QUALIDADE ─────────────────────┐
    │  razao_acoes inteira (tolerância ±0,02)     │
-   │  fx_implicito a menos de 3% da mediana      │
-   │  do universo (auto-calibrado)               │
+   │  cotação implícita a menos de 3% da mediana │
+   │  da sua moeda de pregão (auto-calibrado)    │
    └─────────────────────────────────────────────┘
         │ aprovado                      │ rejeitado
         ▼                               ▼
-  ┌──────────────┬───────────────┐   fora da lista,
-  │ AAPL   (US$) │ AAPL34  (R$)  │   com motivo no log
-  │ fundamentos  │ preço         │
-  │ estimativas  │ liquidez      │
-  └──────────────┴───────────────┘
+   ┌─── ELEGIBILIDADE POR MOEDA ─────────────────┐
+   │  currency == financialCurrency              │
+   │  premissas macro definidas para essa moeda  │
+   └─────────────────────────────────────────────┘
+        │ aprovado                      │ rejeitado
+        ▼                               ▼
+  ┌──────────────────┬───────────────┐   fora da lista,
+  │ AAPL      (US$)  │ AAPL34  (R$)  │   com motivo no log
+  │ fundamentos      │ preço         │
+  │ estimativas      │ liquidez      │
+  └──────────────────┴───────────────┘
         │
         ▼  bdr_filters / bdr_bank_filters
         │
-        ▼  valuation em US$ (RF e ERP americanos, beta vs ^GSPC)
+        ▼  valuation na moeda do balanço (RF e ERP daquela moeda)
         │
-        ▼  preco_justo_bdr = preco_justo(US$) × USD_BRL_RATE ÷ razao
+        ▼  preco_justo na mesma moeda — nenhuma conversão
 ```
 
 ### Identificação do BDR
@@ -160,7 +197,7 @@ Isso separa BDR de ação brasileira e de FII sem lista hard-coded:
 | `ZIFI11.SA` | `FII ZION    CI` | Zion Capital FI | não |
 
 O `longName` do BDR é o nome legal da empresa estrangeira, sem adaptação — é ele que alimenta a
-busca pelo ticker americano.
+busca pelo ticker do subjacente.
 
 `NUBR33.SA` não existe mais no Yahoo (404 no `.info`, ausente do screener); o Nubank aparece como
 `ROXO34.SA → NU`. Nenhum tratamento especial: o papel simplesmente não entra no universo.
@@ -174,47 +211,88 @@ reprovado, o papel **não entra nem com dado parcial**.
 justo com aparência de calculado, sobre outra empresa. `FMXB34` avaliado como Vista Energy sairia
 com número, unidade e formatação corretos, e chegaria ao usuário como recomendação.
 
-A tolerância de 3% e a de ±0,02 no inteiro vêm de premissa, não de ajuste à amostra: o desvio do
-dólar implícito é dominado por defasagem de cotação — o BDR tem 15 minutos de atraso e a ação
-americana é outro instante — e 3% é folga confortável para descasamento intradiário sem acomodar
-erro de identidade. O par errado medido deu 15%, cinco vezes o limite.
+A tolerância de 3% e a de ±0,02 no inteiro vêm de premissa, não de ajuste à amostra: o desvio da
+cotação implícita é dominado por defasagem — o BDR tem 15 minutos de atraso e o subjacente é outro
+instante — e 3% é folga confortável para descasamento intradiário sem acomodar erro de identidade.
+O par errado medido deu 15%, cinco vezes o limite.
 
-A mediana é calculada sobre os pares que já passaram no teste da razão inteira, para que um punhado
-de pares errados não desloque a referência.
+Duas condições sobre a mediana:
+
+1. É calculada **por moeda de pregão do subjacente**. Pares que implicam BRL/USD e pares que
+   implicam BRL/EUR são populações diferentes, e misturá-las produziria uma mediana que não é
+   cotação de nada.
+2. Entram no cálculo apenas os pares que já passaram no teste da razão inteira, para que um punhado
+   de pares errados não desloque a referência.
+
+### Elegibilidade por moeda
+
+Substitui a conversão que existiria num desenho multi-moeda. Duas condições, ambas eliminatórias:
+
+**`currency == financialCurrency`.** É a única circunstância em que `preco ÷ LPA` é um P/L. Sem
+conversão, papel com as duas divergindo não tem como ser avaliado corretamente, e sai: `UL`, `TSM`,
+`AZN.L`, `BHP.AX` da Descoberta 4.
+
+Isso é deliberadamente um critério de elegibilidade, não uma correção aritmética. Uma comparação
+substitui uma família inteira de conversões, cada uma delas um lugar onde uma moeda errada
+produziria um número plausível. A armadilha do `GBp` desaparece junto: `AZN.L` sai pela mesma
+condição, sem precisar de tratamento de subunidade em lugar nenhum.
+
+**Premissas macro definidas para a moeda do balanço.** Papel que reporta numa moeda sem
+`RISK_FREE_RATE_<MOEDA>` e `EQUITY_RISK_PREMIUM_<MOEDA>` no `.env` é excluído, com log nomeando as
+variáveis que faltam. Habilitar um país é editar o `.env`; não há código a mudar.
 
 ### Onde os dados ficam
 
-**`data/fundamentals_bdr.csv`, separado de `data/fundamentals.csv`.** Três razões:
+**`data/fundamentals_bdr.csv`, separado de `data/fundamentals.csv`.** Duas razões:
 
-1. **Moeda na mesma coluna.** Num arquivo único, `preco`, `lpa`, `ebit` e `divida_liquida` seriam
-   R$ nas linhas brasileiras e US$ nas de BDR. É a mesma mistura silenciosa que produz o P/L de 178
-   da Descoberta 1, agora dentro do cache, onde qualquer código futuro assumiria homogeneidade.
-2. **O portão de cache é único.** `fetch_fundamentals` decide por `FUNDAMENTALS_CACHE.exists()` com
+1. **O portão de cache é único.** `fetch_fundamentals` decide por `FUNDAMENTALS_CACHE.exists()` com
    um só `force_refresh`. Unificados, atualizar as ações brasileiras obrigaria a recoletar todos os
    BDRs — que custam dois tickers cada.
-3. Colunas exclusivas de BDR (`ticker_us`, `razao`, `preco_bdr`, `liq_media_diaria_bdr`,
-   `fx_usdbrl`) ficariam NaN nas 372 linhas brasileiras.
+2. Colunas exclusivas de BDR (`ticker_subjacente`, `razao`, `preco_bdr`, `liq_media_diaria_bdr`)
+   ficariam NaN nas 372 linhas brasileiras.
 
 **`data/valuation_history.csv`, o mesmo arquivo.** Aqui unir é o certo e o mecanismo já existe: a
 célula 13 do notebook já carimba `tipo` (`'ação'` / `'banco'`), `_SNAPSHOT_RESULT_COLS` já inclui a
 coluna, e `append_snapshot` já alinha conjuntos de colunas diferentes por `concat` de propósito. O
 terceiro balde entra com `tipo = 'bdr'`.
 
-A condição é a linha do BDR ser gravada **em R$ por BDR**: `preco` é o que se paga na B3 e
-`preco_justo_dcf` é o justo convertido e dividido pela razão. Assim a coluna tem uma unidade só no
-arquivo inteiro. `fx_usdbrl` e `razao` entram no snapshot para a linha ser reproduzível depois.
+### A coluna `moeda`, e por que a mistura é aceitável aqui
 
-Atenção a uma troca de nome entre os dois arquivos, que é deliberada e precisa estar explícita: em
-`fundamentals_bdr.csv` a coluna `preco` é o preço da ação americana em US$ e `preco_bdr` é o preço
-negociado em R$; ao montar o snapshot, é o `preco_bdr` que alimenta a coluna `preco` do histórico.
-Cada arquivo mantém uma unidade coerente por coluna; a conversão entre as duas convenções acontece
-uma única vez, na montagem do snapshot.
+`preco` e `preco_justo_dcf` passam a conter valores em moedas diferentes conforme a linha, e uma
+coluna `moeda` rotula cada uma. Isso contraria a regra que o resto desta spec aplica com rigor, e a
+diferença precisa estar explícita.
 
-### Nomenclatura de colunas
+O que torna a mistura da Descoberta 1 perigosa é ela ser **implícita e dentro da mesma conta**:
+nada no dado avisa que o numerador está em R$ e o denominador em US$, e o resultado sai com cara de
+P/L. Aqui a moeda está rotulada na própria linha, e **nenhuma operação cruza linhas de moedas
+diferentes**:
 
-As colunas do lado americano mantêm os nomes atuais — são a empresa, em US$. As do lado negociado
-levam sufixo `_bdr` e estão em R$: `preco_bdr`, `liq_media_diaria_bdr`. **Nenhuma coluna muda de
-moeda dependendo da linha.**
+| operação | atravessa moedas? |
+|---|---|
+| `pl`, `pvp`, `roe_pct`, margens, `dl_ebit` | não — adimensionais |
+| `margem_seg_*` = `justo / preco − 1` | não — as duas pontas na mesma moeda |
+| ordenação do ranking | não — ordena `margem_seg_media_pct`, adimensional |
+| `compute_sector_averages` | mediana de `pl` e `pvp` — adimensionais |
+| `compute_sector_betas` | mediana de `beta_raw` — adimensional |
+
+A verificação das duas últimas foi feita lendo o código: ambas agregam apenas grandezas
+adimensionais, então a mistura de moedas não as corrompe.
+
+Elas têm, ainda assim, um problema de **modelagem** — ver a seção seguinte.
+
+### Medianas setoriais são por balde, não do universo inteiro
+
+`graham_valuation` multiplica o P/L e o P/VP medianos do setor. Se as medianas forem calculadas
+sobre ações brasileiras e estrangeiras juntas, o P/L mediano de "Technology" no Brasil entra na
+fórmula de Graham de uma empresa americana e produz preço justo sistematicamente baixo.
+
+Não é erro de unidade — é comparar a empresa com um mercado que não é o dela. Pela Guideline 4 o
+erro cai no lado seguro (preço justo menor esconde a ação em vez de recomendá-la), mas esconder
+justamente os papéis que a funcionalidade existe para mostrar anula a funcionalidade.
+
+`apply_valuation(df, all_fundamentals, model=...)` já recebe o frame das medianas como argumento
+separado. Basta o notebook passar `fundamentals_bdr` no balde de BDR, em vez do frame brasileiro. É
+uma linha, e nenhum código novo.
 
 ## Filtros
 
@@ -228,95 +306,81 @@ mercado: se a bolsa americana quase não produz empresa a 10x lucro, a lista vem
 curta é informação. Escolher limiares porque produzem uma lista de tamanho agradável é exatamente o
 ajuste à amostra que a Guideline 3 proíbe.
 
-**Liquidez é do BDR, nunca da ação americana.** O corte lê `liq_media_diaria_bdr`, em R$. Um BDR
-não-patrocinado de uma empresa excelente pode negociar poucos milhares de reais por dia enquanto a
-ação movimenta dezenas de milhões de dólares em Nova York; filtrar pela liquidez americana
-aprovaria um papel que não se compra nem se vende. A liquidez americana não entra em critério
-nenhum.
+**Liquidez é do BDR, em reais, nunca do subjacente.** O corte lê `liq_media_diaria_bdr`. Isso
+resolve dois problemas de uma vez. O prático: um BDR não-patrocinado de uma empresa excelente pode
+negociar poucos milhares de reais por dia enquanto o subjacente movimenta dezenas de milhões em
+Nova York, e filtrar pela liquidez de lá aprovaria um papel que não se compra nem se vende. O de
+unidade: `liq_media_diaria_min: 100000` é um valor em reais, e só faz sentido contra uma grandeza
+em reais — comparar com a liquidez do subjacente em USD, TWD ou JPY seria comparar número com
+número, sem significado. A liquidez do subjacente não entra em critério nenhum.
 
-**`dy_pct` é bruto e não filtra.** O dividendo de empresa americana sofre 30% de retenção na fonte
-antes de chegar ao detentor do BDR, então o `dividendYield` do yfinance é o rendimento do acionista
-americano — o do BDR recebe cerca de 70% disso. A coluna é exibida com o rótulo dizendo que é
-bruta, e `bdr_bank_filters` não usa `dy_pct_min`. Modelar a tributação está fora do escopo, e
-filtrar por um número inflado seria pior que não filtrar.
+**`dy_pct` é bruto e não filtra.** O dividendo de empresa estrangeira sofre retenção na fonte antes
+de chegar ao detentor do BDR (30% no caso americano), então o `dividendYield` do yfinance é o
+rendimento do acionista local. A coluna é exibida com o rótulo dizendo que é bruta, e
+`bdr_bank_filters` não usa `dy_pct_min`. Modelar tributação por país está fora do escopo, e filtrar
+por um número inflado seria pior que não filtrar.
 
 Os critérios adimensionais (margem EBIT, margem líquida, ROE, P/VP, DL/EBIT, DL/PL,
 passivos/ativos, liquidez corrente) atravessam sem alteração de semântica.
 
 ## Valuation
 
-### Premissas macro em US$
+### Premissas por moeda
 
-Novas variáveis no `.env`, seguindo o padrão das existentes:
+As constantes macro passam a ser resolvidas pelo sufixo da moeda do balanço:
 
 ```bash
-# --- Macro em US$ (BDRs) ---
+# --- Macro por moeda ---
+# Uma dupla por moeda habilitada. Papel cujo balanço esteja numa moeda sem
+# premissas definidas é excluído, com log nomeando o que falta.
 RISK_FREE_RATE_USD=0.042        # Treasury longo. Default: 0.042
 EQUITY_RISK_PREMIUM_USD=0.045   # Prêmio de risco EUA. Default: 0.045
-USD_BRL_RATE=5.17               # Cotação do dólar. Default: 5.17 (de 2026-08-12)
+
+# Região varrida pelo yf.screen para montar o universo de BDRs. Default: br
+BDR_REGION=br
 ```
 
-`TERMINAL_GROWTH_USD` segue a regra existente (`= RISK_FREE_RATE`), ficando em ~4,2%. A regra
-"perpetuidade não pode exceder a economia" fica mais defensável aqui do que em reais, porque ~4% é
-próximo do crescimento nominal da economia americana.
+`RISK_FREE_RATE` e `EQUITY_RISK_PREMIUM` sem sufixo continuam existindo e continuam significando
+BRL — nenhum `.env` existente quebra. A resolução procura o sufixo primeiro e cai no nome sem
+sufixo quando a moeda é BRL.
 
-Uma terceira variável controla o universo: `BDR_REGION` (default `br`), a região passada ao
-`yf.screen`.
+`TERMINAL_GROWTH` segue a regra existente (`= RISK_FREE_RATE` da moeda), ficando em ~4,2% para USD.
+A regra "perpetuidade não pode exceder a economia" fica mais defensável aí do que em reais, porque
+~4% é próximo do crescimento nominal da economia americana.
 
-### Beta contra o S&P 500, sobre os retornos da ação americana
+Sobe apenas com USD configurado. Habilitar Europa é acrescentar `RISK_FREE_RATE_EUR` e
+`EQUITY_RISK_PREMIUM_EUR`; até lá, papel que reporta em EUR é excluído com log.
 
-`fetch_betas` ganha o índice como parâmetro; para BDRs é `^GSPC`, e a regressão roda sobre os
-retornos do ticker americano — **não** sobre os do BDR.
+### Beta contra o índice da região, sobre os retornos do subjacente
 
-O retorno do BDR em reais embute a variação do dólar. Usá-lo colocaria risco cambial dentro do
-beta, enquanto o fluxo descontado é em dólar e a conversão só acontece no fim. Misturar as duas
-coisas contaria o câmbio duas vezes.
+`fetch_betas` ganha o índice como parâmetro (`^GSPC` para papel americano), e a regressão roda sobre
+os retornos do ticker do subjacente — **não** sobre os do BDR.
 
-### Cotação do dólar
+O retorno do BDR em reais embute a variação do câmbio. Usá-lo colocaria risco cambial dentro do
+beta, enquanto o fluxo descontado está na moeda do balanço e nunca é convertido. Seriam duas
+grandezas diferentes carimbadas com o mesmo nome.
 
-`USD_BRL_RATE` é lida do `.env` por `_env_float`, como as demais premissas macro, com **5,17** de
-default — a cotação de 2026-08-12, data desta spec.
+### Nenhuma conversão, e o que isso custa
 
-Vale registrar por que ela fica no `.env` mesmo sendo um dado que o yfinance **fornece**
-(`USDBRL=X` responde normalmente), ao contrário da convenção declarada no cabeçalho do
-`.env.example`. Três motivos:
+O preço justo sai na moeda do balanço e fica nela. `AAPL` é avaliada em dólar e exibida em dólar.
 
-1. **Reprodutibilidade do snapshot.** O histórico grava `fx_usdbrl` junto com RF e ERP como
-   premissa da rodada. Com a cotação vindo da rede, duas execuções no mesmo dia gravam preços
-   justos diferentes sem que nenhuma premissa tenha mudado.
-2. **É premissa, não medição.** Converter um preço justo de 10 anos de fluxo pelo dólar de um
-   instante já é uma escolha; deixá-la explícita permite rodar cenário ("e se o dólar for a 6?")
-   editando uma linha.
-3. **Remove um modo de falha.** A cotação era o único ponto do pipeline capaz de derrubar todos os
-   BDRs por indisponibilidade de rede.
+O que se perde é ver o preço justo do `AAPL34` em reais. O que se ganha é que **a margem de
+segurança liga as duas pontas de graça**: `justo / preco − 1` calculada em dólar sobre `AAPL` é a
+margem do `AAPL34`, porque uma conversão apareceria nos dois termos e se cancelaria. O portão já
+garantiu que o BDR acompanha o subjacente dentro de 3%.
 
-**O portão de qualidade não usa esse valor.** Ele se calibra pela mediana dos dólares implícitos do
-próprio universo. Isso importa: se o portão dependesse de `USD_BRL_RATE` e o dólar de mercado
-andasse mais que 3% desde a última vez que você editou o `.env`, **todos** os pares passariam a
-desviar acima da tolerância e o screener rejeitaria o universo inteiro — uma falha total disparada
-por um valor desatualizado, e que se pareceria com "nenhum BDR passou nos critérios". Separando as
-duas coisas, uma cotação velha no `.env` erra apenas o valor em R$ exibido, proporcionalmente e de
-forma auditável pela coluna `fx_usdbrl` do snapshot.
-
-### Conversão, num lugar só
-
-```
-preco_justo_bdr(R$) = preco_justo(US$) × USD_BRL_RATE ÷ razao
-```
-
-A margem de segurança é invariante ao câmbio: `justo / preco − 1` dá o mesmo número calculado em
-dólar ou em real, porque o `fx` aparece nos dois termos. Uma cotação desatualizada no `.env` move o
-valor exibido em R$, nunca a decisão nem o ranking.
+Na prática o BDR aparece com preço em R$ (o que se paga), liquidez em R$ (o que filtra) e a margem
+de segurança do subjacente — que é o número que decide a compra, e é comparável com ação
+brasileira, europeia ou japonesa, porque margem é adimensional.
 
 Os limiares de projetabilidade (`MAX_PROJECTABLE_GROWTH`, `MIN_TREND_R2`) não mudam: respondem
 "consigo projetar essa taxa por 10 anos?", pergunta que não tem moeda.
 
-### Premissas por balde
+### Premissas gravadas por linha
 
 `RISK_FREE_RATE`, `EQUITY_RISK_PREMIUM` e `TERMINAL_GROWTH` são hoje constantes de módulo, lidas
-direto por `cost_of_equity` e por `append_snapshot`. Passam a ser dois conjuntos selecionados pelo
-balde, com o de reais como default — de modo que toda chamada existente continue funcionando sem
-alteração.
+direto por `cost_of_equity` e por `append_snapshot`. Passam a ser resolvidas por moeda, com BRL como
+default — de modo que toda chamada existente continue funcionando sem alteração.
 
 **Isso não é refatoração cosmética.** `append_snapshot` grava as premissas linha a linha a partir
 das constantes do módulo, e seu docstring declara que elas existem para "uma divergência futura ser
@@ -326,33 +390,34 @@ verdadeira. O histórico passaria a mentir exatamente sobre o que foi feito para
 
 ### Consequência conhecida: BDRs devem dominar o ranking
 
-Descontar a 4,2% em vez de 12,4% produz preço justo estruturalmente mais alto. Como o top-20 ordena
-por `margem_seg_media_pct`, é esperado que os BDRs ocupem a maior parte da lista assim que entrarem.
+Descontar a 4,2% em vez de 12,4% produz preço justo estruturalmente mais alto em relação ao preço.
+Como o top-20 ordena por `margem_seg_media_pct`, é esperado que os BDRs ocupem a maior parte da
+lista assim que entrarem.
 
 Não é defeito do modelo. Reflete um fato: ativo brasileiro precisa render mais porque o juro em
 reais é maior, então uma ação daqui tem que estar genuinamente mais barata para empatar com uma de
-lá. A comparação entre baldes é legítima.
+lá. A comparação entre baldes é legítima, e é justamente o que a ausência de conversão preserva —
+margem de segurança é adimensional e não depende de nenhuma cotação.
 
 **Nenhuma normalização será aplicada.** Qualquer ajuste para "equilibrar" a lista seria escolher o
-resultado antes de calculá-lo. A coluna `tipo` fica visível no ranking, que é o suficiente para o
-leitor ver a origem de cada linha. Se depois a preferência for listar os baldes em separado, isso é
-mudança de exibição e não de modelo.
+resultado antes de calculá-lo. As colunas `tipo` e `moeda` ficam visíveis no ranking, que é o
+suficiente para o leitor ver a origem de cada linha.
 
 ## Componentes
 
 | arquivo | responsabilidade |
 |---|---|
-| `src/bdrs.py` (novo) | universo via screener, marcador `DR[N123]`, resolução do par, portão de qualidade, cache `data/bdrs.csv` |
-| `src/fundamentals.py` | `fetch_betas` recebe o índice como parâmetro; `fetch_fundamentals` recebe o caminho do cache como parâmetro (hoje `FUNDAMENTALS_CACHE` é fixo no módulo, e os dois baldes gravam em arquivos diferentes); o corpo da coleta é reaproveitado sem alteração |
-| `src/valuation.py` | premissas macro por balde; conversão do preço justo; snapshot com `fx_usdbrl` e `razao` |
+| `src/bdrs.py` (novo) | universo via screener, marcador `DR[N123]`, resolução do par, portão de qualidade, elegibilidade por moeda, cache `data/bdrs.csv` |
+| `src/fundamentals.py` | `fetch_betas` recebe o índice como parâmetro; `fetch_fundamentals` recebe o caminho do cache como parâmetro (hoje `FUNDAMENTALS_CACHE` é fixo no módulo) e passa a gravar `moeda` a partir de `financialCurrency`; o corpo da coleta é reaproveitado sem alteração |
+| `src/valuation.py` | premissas macro resolvidas por moeda; snapshot gravando as premissas efetivamente usadas em cada linha |
 | `src/filters.py` | `apply_bdr_filters`, lendo `bdr_filters` / `bdr_bank_filters` |
 | `config/filters.json` | dois blocos novos |
-| `.env.example` | `RISK_FREE_RATE_USD`, `EQUITY_RISK_PREMIUM_USD`, `USD_BRL_RATE`, `BDR_REGION` |
-| `analysis.ipynb` | terceiro balde, `tipo = 'bdr'`, na união da célula 13 |
+| `.env.example` | `RISK_FREE_RATE_USD`, `EQUITY_RISK_PREMIUM_USD`, `BDR_REGION` |
+| `analysis.ipynb` | terceiro balde com `tipo = 'bdr'`; medianas setoriais do balde de BDR vindas de `fundamentals_bdr` |
 
 `src/bdrs.py` é o único módulo com lógica nova. Sua fronteira é estreita: recebe uma região,
-devolve um DataFrame de pares `(ticker_bdr, ticker_us, razao)` já validados. Quem consome não
-precisa saber nada sobre screener, marcadores ou tolerâncias.
+devolve um DataFrame de pares `(ticker_bdr, ticker_subjacente, razao, moeda)` já validados. Quem
+consome não precisa saber nada sobre screener, marcadores, tolerâncias ou elegibilidade.
 
 ## Tratamento de erro
 
@@ -363,13 +428,15 @@ Nenhuma falha de rede ou de dado pode derrubar a coleta, seguindo o padrão já 
 |---|---|
 | `yf.screen` falha | erro propagado — sem universo não há o que fazer, e falhar em silêncio produziria lista vazia indistinguível de "nada passou" |
 | `yf.Search` falha ou não devolve candidato | BDR descartado, motivo no log |
-| razão não-inteira, ou dólar implícito fora da tolerância | BDR descartado, motivo e os dois valores no log |
-| menos de 3 pares sobrevivem ao teste da razão inteira | mediana não é referência confiável com amostra minúscula; nenhum BDR entra, com aviso explícito distinguindo isso de "nada passou nos filtros" |
-| `.info` do ticker americano vazio | linha com NaN, como já acontece hoje |
-| `USD_BRL_RATE` ausente do `.env` | usa o default de 5,17, como `_env_float` já faz com RF e ERP |
+| razão não-inteira, ou cotação implícita fora da tolerância | BDR descartado, motivo e os dois valores no log |
+| menos de 3 pares na mesma moeda de pregão | mediana não é referência confiável com amostra minúscula; nenhum desses pares entra, com aviso explícito distinguindo isso de "nada passou nos filtros" |
+| `currency != financialCurrency` | BDR descartado, com as duas moedas no log |
+| moeda do balanço sem premissas no `.env` | BDR descartado, log nomeando as variáveis que faltam |
+| `.info` do subjacente vazio | linha com NaN, como já acontece hoje |
 
 A contagem de descartes por motivo é impressa ao fim da resolução, no mesmo formato das mensagens
-`[filters]` existentes.
+`[filters]` existentes. Os motivos são distinguíveis entre si: "não resolveu", "reprovou no portão",
+"moeda divergente" e "moeda sem premissas" pedem ações diferentes do usuário.
 
 ## Testes
 
@@ -378,25 +445,27 @@ construídos à mão — nunca sobre o cache, pela Guideline 3.
 
 **`src/bdrs.py`**
 - marcador `DR[N123]` aceita `DRN`, `DR1`, `DR2`, `DR3` e rejeita `ON NM`, `PN`, `CI`
-- portão aprova pares concordantes; rejeita razão não-inteira; rejeita dólar implícito fora da
+- portão aprova pares concordantes; rejeita razão não-inteira; rejeita cotação implícita fora da
   tolerância
 - fronteira da tolerância: desvio exatamente no limite, logo abaixo e logo acima
-- a mediana ignora os pares já reprovados pela razão inteira — um lote de pares errados não desloca
-  a referência
-- **o portão não lê `USD_BRL_RATE`**: com a variável fixada num valor absurdo, o mesmo conjunto de
-  pares é aprovado. É o teste que trava a separação descrita em "Cotação do dólar"
-- universo com menos de 3 pares válidos não aprova ninguém, e o aviso é distinguível de "nada
+- a mediana é por moeda de pregão: um grupo em EUR não desloca a referência do grupo em USD
+- a mediana ignora os pares já reprovados pela razão inteira
+- grupo de moeda com menos de 3 pares válidos não aprova ninguém, e o aviso é distinguível de "nada
   passou nos filtros"
+- `currency != financialCurrency` exclui, mesmo com o portão aprovado
+- moeda sem premissas no `.env` exclui, e a mensagem nomeia as variáveis faltantes
 - BDR sem candidato não aparece na saída
 - reprovado não aparece na saída **com dado parcial** — a asserção é sobre ausência da linha
 
 **`src/valuation.py`**
-- conversão: `justo(US$) × USD_BRL_RATE ÷ razao` com valores conhecidos
-- `USD_BRL_RATE` ausente cai no default; valor inválido cai no default com aviso, como `_env_float`
-- margem de segurança idêntica calculada em US$ e em R$ (invariância ao câmbio)
-- premissas por balde: snapshot de linha `bdr` grava RF/ERP em dólar; linha `ação` grava em reais;
-  as duas no mesmo `append_snapshot`
-- default preservado: chamada sem balde continua usando as premissas em reais
+- resolução das premissas por moeda: `USD` usa `RISK_FREE_RATE_USD`; `BRL` usa `RISK_FREE_RATE`
+- default preservado: chamada sem moeda continua usando as premissas em reais
+- snapshot de linha `bdr` grava RF/ERP em dólar e linha `ação` grava em reais, no mesmo
+  `append_snapshot`
+- margem de segurança de um par BDR/subjacente é a mesma calculada em qualquer das duas moedas —
+  trava a invariância que substitui a conversão
+- medianas setoriais vindas de frames distintos produzem preços de Graham distintos para a mesma
+  empresa: trava a separação por balde
 
 **`src/filters.py`**
 - `apply_bdr_filters` corta por `liq_media_diaria_bdr` e ignora `liq_media_diaria`
@@ -405,9 +474,12 @@ construídos à mão — nunca sobre o cache, pela Guideline 3.
 
 ## Fora de escopo
 
-- Modelagem de tributação (retenção de 30% no dividendo, IOF, imposto sobre ganho de capital)
-- BDRs cujo ativo subjacente não negocia em bolsa americana em dólar — o portão os descarta, e
-  suportá-los exigiria taxa livre de risco por moeda
+- **Conversão de moeda em qualquer ponto do pipeline.** Papel cujo pregão e balanço divergem é
+  excluído em vez de convertido
+- Preço justo do BDR exibido em reais — consequência direta do item acima
+- Modelagem de tributação (retenção na fonte sobre dividendo, IOF, ganho de capital)
+- Tratamento de subunidades monetárias (`GBp`, `ILA`, `ZAc`): os papéis afetados já saem pela
+  divergência entre pregão e balanço
 - Normalização do ranking entre baldes
 - Reclassificação dos BDRs de empresa brasileira (`JBSS32`, `XPBR31`, `INBR32`, `ROXO34`,
   `AURA33`): passam pelo mesmo caminho dos demais, sem tratamento próprio, ainda que sua operação
