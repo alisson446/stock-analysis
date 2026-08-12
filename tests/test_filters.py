@@ -213,7 +213,52 @@ def test_shipped_config_has_the_lpa_guard_on():
     este teste, ninguém notaria antes de uma empresa com prejuízo projetado
     voltar a passar no screener.
     """
-    cfg = filters._load_config()
+    cfg = filters._load_config('br')
     for block in ('stock_filters', 'bank_filters'):
         assert cfg[block]['exigir_lpa_estimado'] is True
         assert cfg[block]['lpa_estimado_min'] == 0
+
+
+class TestLoadConfigPorRegiao:
+    """A região escolhe a pasta do filters.json; região sem arquivo é erro."""
+
+    def test_br_carrega_o_arquivo_movido(self):
+        cfg = filters._load_config('br')
+        assert 'stock_filters' in cfg and 'bank_filters' in cfg
+
+    def test_regiao_sem_arquivo_levanta_erro_nomeando_o_caminho(self):
+        with pytest.raises(FileNotFoundError) as exc:
+            filters._load_config('zz')
+        # A mensagem precisa dizer QUAL arquivo criar — senão o usuário só
+        # descobre que "faltou algo" sem saber onde.
+        assert 'zz' in str(exc.value) and 'filters.json' in str(exc.value)
+
+    def test_regiao_malformada_levanta_value_error(self):
+        with pytest.raises(ValueError):
+            filters._load_config('../etc')
+
+
+class TestLiquidityMask:
+    """
+    O corte de liquidez muda de coluna conforme a região: no Brasil filtra a
+    liquidez da própria ação; na região alcançada via BDR filtra a do BDR, em
+    reais, porque é o que se consegue negociar. A chave do config carrega a
+    unidade no nome para não ser lida como dólar.
+    """
+
+    def test_usa_liq_media_diaria_quando_a_chave_e_a_local(self):
+        df = pd.DataFrame({'liq_media_diaria': [50_000, 150_000],
+                           'liq_media_diaria_bdr': [999_999, 1]})
+        mask = filters._liquidity_mask(df, {'liq_media_diaria_min': 100_000})
+        assert list(mask) == [False, True]
+
+    def test_usa_liq_media_diaria_bdr_quando_a_chave_e_a_do_bdr(self):
+        df = pd.DataFrame({'liq_media_diaria': [999_999, 1],
+                           'liq_media_diaria_bdr': [50_000, 150_000]})
+        mask = filters._liquidity_mask(df, {'liq_media_diaria_bdr_min': 100_000})
+        assert list(mask) == [False, True]
+
+    def test_config_sem_chave_de_liquidez_levanta_erro(self):
+        df = pd.DataFrame({'liq_media_diaria': [1]})
+        with pytest.raises(KeyError):
+            filters._liquidity_mask(df, {'pl_max': 10})
