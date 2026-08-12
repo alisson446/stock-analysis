@@ -421,11 +421,26 @@ critério nenhum.
 O nome com sufixo `_bdr` é deliberado: é o único critério do arquivo `us` cujo valor está em reais,
 e o sufixo impede que ele seja lido como "cem mil dólares" por quem editar o arquivo depois.
 
-**E nenhuma cotação é necessária para aplicá-lo.** `liq_media_diaria_bdr` sai de
-`regularMarketPrice × averageDailyVolume10Day` do payload do screener, ambos do pregão de B3 e
-ambos em reais (`TSMC34.SA`: 278,75 × 165.690 = R$ 46.186.088, medição de 2026-08-12). A comparação
-é reais contra reais. Câmbio só faria falta no critério que esta spec descarta — filtrar pela
-liquidez do subjacente, que está em USD, TWD ou JPY.
+**E nenhuma cotação é necessária para aplicá-lo.** `liq_media_diaria_bdr` é o mesmo cálculo que
+`fundamentals.py` já faz para ações brasileiras — `averageDailyVolume10Day × preço` —, só que sobre
+os campos do BDR: o `regularMarketPrice` do payload do screener já vem em reais (o `currency` do
+BDR é `BRL`) e o volume é contagem, sem moeda. `TSMC34.SA`: 278,75 × 165.690 = R$ 46.186.088
+(medição de 2026-08-12). A comparação é reais contra reais. Câmbio só faria falta no critério que
+esta spec descarta — filtrar pela liquidez do subjacente, que está em USD, TWD ou JPY.
+
+**A coluna `liq_media_diaria` do subjacente não é gravada na região `us`.** `fetch_fundamentals`
+a calcularia com o preço da `AAPL`, em dólar, e o arquivo ficaria com duas colunas quase homônimas
+em moedas diferentes — sendo a **sem** sufixo a estrangeira:
+
+```
+liq_media_diaria      ← US$, da AAPL em Nova York   (nenhum critério usa)
+liq_media_diaria_bdr  ← R$, do AAPL34 em B3         (a que filtra)
+```
+
+É o par exato que esta spec existe para evitar, e agravado pelo fato de a coluna sem sufixo ser a
+que um leitor assumiria ser a principal. Como ela não alimenta critério, valuation nem exibição,
+não é gravada. Apagar é mais seguro que renomear: um nome novo ainda pede que alguém o leia
+direito, a ausência não pede nada.
 
 Vale registrar por que apenas essa chave precisou de sufixo. Levantando as unidades de todos os
 critérios: `pl`, `pvp`, `dl_ebit`, `dl_pl`, `passivos_ativos` e `liquidez_corrente` são
@@ -608,7 +623,9 @@ construídos à mão — nunca sobre o cache, pela Guideline 3.
 **`src/filters.py`**
 - `apply_stock_filters(df, region='us')` lê `config/us/filters.json`, e `region='br'` lê o de `br`
 - região sem `config/<regiao>/filters.json` levanta erro nomeando o caminho, em vez de usar defaults
-- o corte de liquidez da região `us` usa `liq_media_diaria_bdr` e ignora `liq_media_diaria`
+- o corte de liquidez da região `us` usa `liq_media_diaria_bdr`
+- `data/us/fundamentals.csv` **não tem** a coluna `liq_media_diaria` — a asserção é sobre ausência,
+  para que a coluna em dólar não reapareça por descuido ao lado da homônima em reais
 - `bank_filters` de `us` não aplica `dy_pct_min`; o de `br` aplica
 - NaN reprova nos critérios exigidos, como já vale para `_estimates_mask`
 
