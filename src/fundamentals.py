@@ -5,8 +5,7 @@ import time
 from pathlib import Path
 from tqdm import tqdm
 
-DATA_DIR = Path(__file__).resolve().parent.parent / 'data'
-FUNDAMENTALS_CACHE = DATA_DIR / 'fundamentals.csv'
+from src import paths
 
 
 def _safe_get(info: dict, key: str, default=np.nan):
@@ -201,29 +200,47 @@ def fetch_betas(tickers_sa: list[str], index_symbol: str = '^BVSP',
 
 
 def fetch_fundamentals(tickers_sa: list[str], delay: float = 0.5,
-                       force_refresh: bool = False) -> pd.DataFrame:
+                       force_refresh: bool = False, region: str = 'br',
+                       index_symbol: str = '^BVSP',
+                       incluir_liq_local: bool = True) -> pd.DataFrame:
     """
     Coleta dados fundamentalistas de cada ticker via yfinance.
-    Usa cache local (data/fundamentals.csv) se existir.
-    Se não existir ou force_refresh=True, busca via API e salva o resultado.
+    Usa cache local (data/<region>/fundamentals.csv) se existir.
 
     Args:
-        tickers_sa: Lista de tickers com sufixo .SA (ex: ['PETR4.SA', 'VALE3.SA'])
+        tickers_sa: Lista de tickers como o yfinance os conhece. Para 'br' é
+            com sufixo .SA ('PETR4.SA'); para 'us' é o ticker puro ('AAPL').
         delay: Tempo de espera entre requisições (segundos)
         force_refresh: Se True, ignora cache e busca dados novos
+        region: Pasta de dados de destino
+        index_symbol: Índice contra o qual o beta é regredido. '^BVSP' para
+            papel brasileiro, '^GSPC' para americano — o beta precisa medir o
+            papel contra o mercado dele, não contra outro.
+        incluir_liq_local: Se False, a coluna `liq_media_diaria` não é gravada.
+            É o caso da região alcançada via BDR: a liquidez do subjacente em
+            Nova York não é negociável daqui, e deixá-la no arquivo criaria
+            duas colunas quase homônimas em moedas diferentes — sendo a SEM
+            sufixo a estrangeira, justamente a que se assume ser a principal.
 
     Returns:
         DataFrame com todas as métricas calculadas
     """
-    if not force_refresh and FUNDAMENTALS_CACHE.exists():
-        df = pd.read_csv(FUNDAMENTALS_CACHE)
-        print(f"[fundamentals] {len(df)} tickers carregados do cache ({FUNDAMENTALS_CACHE})")
+    cache = paths.data_file(region, 'fundamentals.csv')
+    if not force_refresh and cache.exists():
+        df = pd.read_csv(cache)
+        # Linhas gravadas antes da coluna existir são todas brasileiras.
+        if 'moeda' not in df.columns:
+            df['moeda'] = 'BRL'
+        print(f"[fundamentals] {len(df)} tickers carregados do cache ({cache})")
         return df
 
-    return _fetch_fundamentals_from_api(tickers_sa, delay)
+    return _fetch_fundamentals_from_api(tickers_sa, delay, cache, index_symbol,
+                                        incluir_liq_local)
 
 
-def _fetch_fundamentals_from_api(tickers_sa: list[str], delay: float) -> pd.DataFrame:
+def _fetch_fundamentals_from_api(tickers_sa: list[str], delay: float, cache: Path,
+                                 index_symbol: str,
+                                 incluir_liq_local: bool) -> pd.DataFrame:
     """Busca dados fundamentalistas via yfinance e salva em cache."""
     records = []
 
@@ -245,6 +262,10 @@ def _fetch_fundamentals_from_api(tickers_sa: list[str], delay: float) -> pd.Data
             sector = _safe_get(info, 'sector', '')
             industry = _safe_get(info, 'industry', '')
             company_name = _safe_get(info, 'shortName', ticker_sa)
+            # Moeda do BALANÇO, não a do pregão. É ela que rege lucro, EBIT,
+            # FCF e o preço justo — e é a que precisa bater com a do preço
+            # para o P/L recalculado significar alguma coisa.
+            moeda = _safe_get(info, 'financialCurrency', '')
             dividend_yield = _safe_get(info, 'dividendYield')
             dividend_rate = _safe_get(info, 'dividendRate')  # DPS anual em R$
             total_debt = _safe_get(info, 'totalDebt')
@@ -379,6 +400,7 @@ def _fetch_fundamentals_from_api(tickers_sa: list[str], delay: float) -> pd.Data
                 'nome': company_name,
                 'setor': sector,
                 'industria': industry,
+                'moeda': moeda,
                 'preco': current_price,
                 'pl': pe_ratio,
                 'pvp': pb_ratio,
@@ -413,6 +435,7 @@ def _fetch_fundamentals_from_api(tickers_sa: list[str], delay: float) -> pd.Data
                 'nome': ticker_sa,
                 'setor': '',
                 'industria': '',
+                'moeda': '',
                 **{k: np.nan for k in [
                     'preco', 'pl', 'pvp', 'margem_ebit_pct', 'margem_liquida_pct',
                     'dl_ebit', 'dl_pl', 'roe_pct', 'liquidez_corrente', 'passivos_ativos',
@@ -427,15 +450,17 @@ def _fetch_fundamentals_from_api(tickers_sa: list[str], delay: float) -> pd.Data
 
     df = pd.DataFrame(records)
 
-    # Beta por regressão vs Ibovespa (download em lote, fora do loop acima)
-    df['beta_raw'] = df['ticker_sa'].map(fetch_betas(tickers_sa))
+    # Beta por regressão vs o índice da região (download em lote, fora do laço).
+    df['beta_raw'] = df['ticker_sa'].map(fetch_betas(tickers_sa, index_symbol))
 
-    # Salvar cache
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    df.to_csv(FUNDAMENTALS_CACHE, index=False)
+    if not incluir_liq_local:
+        df = df.drop(columns=['liq_media_diaria'], errors='ignore')
+
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(cache, index=False)
 
     print(f"\n[fundamentals] {len(df)} tickers processados, "
-          f"{df['preco'].notna().sum()} com dados de preço (salvo em {FUNDAMENTALS_CACHE})")
+          f"{df['preco'].notna().sum()} com dados de preço (salvo em {cache})")
     return df
 
 

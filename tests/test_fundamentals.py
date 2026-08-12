@@ -245,3 +245,41 @@ class TestExtractAnalystEstimates:
         assert np.isnan(lucro)
         assert lpa_est == pytest.approx(1.60)
         assert analistas == 12
+
+
+class TestLeituraDoCachePorRegiao:
+    """
+    O cache passa a viver em data/<regiao>/fundamentals.csv, e a coluna `moeda`
+    é nova. As 372 linhas gravadas antes desta mudança não a têm, então
+    ausência significa BRL — senão uma rodada que só queria reaproveitar dado
+    quebraria com KeyError.
+    """
+
+    def _grava(self, tmp_path, regiao, df):
+        (tmp_path / regiao).mkdir(parents=True, exist_ok=True)
+        df.to_csv(tmp_path / regiao / 'fundamentals.csv', index=False)
+
+    def test_le_o_cache_da_regiao(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(f.paths, 'DATA_ROOT', tmp_path)
+        self._grava(tmp_path, 'us', pd.DataFrame({'ticker': ['AAPL'], 'moeda': ['USD']}))
+
+        out = f.fetch_fundamentals([], region='us')
+
+        assert list(out['ticker']) == ['AAPL']
+        assert list(out['moeda']) == ['USD']
+
+    def test_cache_antigo_sem_coluna_moeda_e_lido_como_brl(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(f.paths, 'DATA_ROOT', tmp_path)
+        self._grava(tmp_path, 'br', pd.DataFrame({'ticker': ['PETR4'], 'pl': [4.2]}))
+
+        out = f.fetch_fundamentals([], region='br')
+
+        assert list(out['moeda']) == ['BRL']
+
+    def test_moeda_ja_gravada_nao_e_sobrescrita(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(f.paths, 'DATA_ROOT', tmp_path)
+        self._grava(tmp_path, 'us', pd.DataFrame({'ticker': ['SAP'], 'moeda': ['EUR']}))
+
+        out = f.fetch_fundamentals([], region='us')
+
+        assert list(out['moeda']) == ['EUR']
