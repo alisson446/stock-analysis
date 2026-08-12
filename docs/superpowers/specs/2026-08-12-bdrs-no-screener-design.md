@@ -591,7 +591,7 @@ suficiente para o leitor ver a origem de cada linha.
 | `src/filters.py` | `apply_stock_filters` e `apply_bank_filters` recebem a região; nenhuma função nova |
 | `config/br/filters.json` | o arquivo de hoje, movido por `git mv` |
 | `config/us/filters.json` | novo: mesmas chaves, `liq_media_diaria_bdr_min` no lugar de `liq_media_diaria_min`, `bank_filters` sem `dy_pct_min` |
-| `data/br/*` | os 3 arquivos de hoje, movidos por `git mv` |
+| `data/br/*` | os 3 arquivos de hoje, movidos por `mv` simples — `data/` está no `.gitignore`, nada ali é rastreado e `git mv` falharia com "not under version control" |
 | `.env.example` | `RISK_FREE_RATE_USD`, `EQUITY_RISK_PREMIUM_USD`, `BDR_REGION` |
 | `analysis.ipynb` | pipeline da região `us` (ações e bancos), leitura por região, coluna `regiao`, concatenação para o ranking unificado |
 
