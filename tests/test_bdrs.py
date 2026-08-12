@@ -237,3 +237,74 @@ class TestAprovarPeloPortao:
         monkeypatch.setenv('USD_BRL_RATE', '999')
         aprovados, _ = bdrs.aprovar_pelo_portao(self._cinco_bons())
         assert len(aprovados) == 5
+
+
+class TestMotivoInelegibilidade:
+    """
+    Sem conversão de moeda, `preco ÷ LPA` só é um P/L quando pregão e balanço
+    estão na mesma moeda. E sem premissas macro não há taxa de desconto.
+    """
+
+    def test_elegivel_devolve_none(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(bdrs.paths, 'CONFIG_ROOT', tmp_path)
+        (tmp_path / 'us').mkdir()
+        (tmp_path / 'us' / 'filters.json').write_text('{}')
+        assert bdrs.motivo_inelegibilidade('USD', 'USD', 'us', {'us'}) is None
+
+    def test_moeda_divergente_exclui(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(bdrs.paths, 'CONFIG_ROOT', tmp_path)
+        (tmp_path / 'us').mkdir()
+        (tmp_path / 'us' / 'filters.json').write_text('{}')
+        # UL negocia em USD e reporta em EUR; TSM em USD e reporta em TWD.
+        assert bdrs.motivo_inelegibilidade('USD', 'EUR', 'us', {'us'}) == 'moeda_divergente'
+        # AZN.L cota em pence com balanço em dólar — sai pela mesma condição,
+        # então a armadilha do GBp nunca precisa de tratamento.
+        assert bdrs.motivo_inelegibilidade('GBp', 'USD', 'gb', {'gb'}) == 'moeda_divergente'
+
+    def test_moeda_sem_premissas_exclui(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(bdrs.paths, 'CONFIG_ROOT', tmp_path)
+        (tmp_path / 'tw').mkdir()
+        (tmp_path / 'tw' / 'filters.json').write_text('{}')
+        assert bdrs.motivo_inelegibilidade('TWD', 'TWD', 'tw', {'tw'}) == 'moeda_sem_premissas'
+
+    def test_regiao_descoberta_sem_config_exclui_so_o_papel(self, tmp_path, monkeypatch):
+        # Um BDR resolvido para Londres não pode derrubar a rodada inteira.
+        monkeypatch.setattr(bdrs.paths, 'CONFIG_ROOT', tmp_path)
+        assert bdrs.motivo_inelegibilidade('USD', 'USD', 'gb', {'us'}) == 'regiao_sem_config'
+
+    def test_regiao_pedida_sem_config_levanta_erro(self, tmp_path, monkeypatch):
+        # Você pediu por ela: filtrar por defaults que ninguém escolheu é pior.
+        monkeypatch.setattr(bdrs.paths, 'CONFIG_ROOT', tmp_path)
+        with pytest.raises(FileNotFoundError):
+            bdrs.motivo_inelegibilidade('USD', 'USD', 'us', {'us'})
+
+
+class TestMontarFrames:
+    """
+    Os dois frames têm tempos de vida diferentes: o par é estável e vai para o
+    tickers.csv; preço e liquidez são voláteis e não podem ser gravados lá,
+    senão o arquivo "estável" guarda uma cotação velha que ninguém sabe que é
+    velha.
+    """
+
+    def _aprovado(self):
+        return [{'ticker': 'AAPL', 'ticker_bdr': 'AAPL34.SA', 'razao': 20.0,
+                 'moeda': 'USD', 'preco_bdr': 78.64, 'volume_bdr': 468071,
+                 'preco_subjacente': 304.76, 'moeda_pregao': 'USD'}]
+
+    def test_pares_tem_so_as_colunas_estaveis(self):
+        pares, _ = bdrs.montar_frames(self._aprovado())
+        assert list(pares.columns) == ['ticker', 'ticker_bdr', 'razao', 'moeda']
+
+    def test_cotacoes_tem_so_as_volateis(self):
+        _, cotacoes = bdrs.montar_frames(self._aprovado())
+        assert list(cotacoes.columns) == ['ticker', 'preco_bdr', 'liq_media_diaria_bdr']
+
+    def test_liquidez_e_volume_vezes_preco_do_bdr(self):
+        _, cotacoes = bdrs.montar_frames(self._aprovado())
+        assert cotacoes['liq_media_diaria_bdr'].iloc[0] == pytest.approx(78.64 * 468071)
+
+    def test_os_dois_frames_sao_disjuntos_fora_do_ticker(self):
+        pares, cotacoes = bdrs.montar_frames(self._aprovado())
+        comuns = set(pares.columns) & set(cotacoes.columns)
+        assert comuns == {'ticker'}

@@ -15,6 +15,9 @@ import pandas as pd
 import yfinance as yf
 from yfinance import EquityQuery as EQ
 
+from src import paths
+from src.valuation import macro_for
+
 # Marcador do tipo de recibo no shortName: DRN é não-patrocinado, DR1/DR2/DR3
 # são os patrocinados.
 #
@@ -201,3 +204,72 @@ def aprovar_pelo_portao(candidatos: list[dict]) -> tuple[list[dict], dict]:
             aprovados.append({**c, 'cotacao_implicita': implicita})
 
     return aprovados, descartes
+
+
+def motivo_inelegibilidade(moeda_pregao: str, moeda_balanco: str, regiao: str,
+                           regioes_pedidas: set) -> str | None:
+    """
+    Diz por que um par aprovado no portão ainda assim não entra, ou None.
+
+    Três condições, todas eliminatórias:
+
+    - `moeda_divergente`: pregão e balanço em moedas diferentes. Sem conversão,
+      `preco ÷ LPA` só é um P/L quando as duas são a mesma. Uma comparação
+      substitui uma família inteira de conversões, e a armadilha do `GBp`
+      (pence, centésimo de libra) desaparece junto — `AZN.L` sai por aqui.
+    - `moeda_sem_premissas`: sem juro livre de risco e prêmio de risco daquela
+      moeda não existe taxa de desconto.
+    - `regiao_sem_config`: o subjacente caiu numa região que não tem
+      `config/<r>/filters.json`.
+
+    A última distingue região PEDIDA de região DESCOBERTA. Se você pediu a
+    região, a falta do arquivo é erro — filtrar por defaults que ninguém
+    escolheu é pior que parar. Se ela apenas apareceu porque um subjacente
+    resolveu para lá, derrubar a rodada inteira por causa de um papel seria
+    desproporcional, e ele é apenas excluído.
+    """
+    if (moeda_pregao or '') != (moeda_balanco or ''):
+        return 'moeda_divergente'
+
+    if macro_for(moeda_balanco) is None:
+        return 'moeda_sem_premissas'
+
+    if not paths.filters_file(regiao).exists():
+        if regiao in regioes_pedidas:
+            raise FileNotFoundError(
+                f"filtros da região {regiao!r} não encontrados em "
+                f"{paths.filters_file(regiao)}. Crie o arquivo antes de rodar "
+                f"o screener nessa região."
+            )
+        return 'regiao_sem_config'
+
+    return None
+
+
+def montar_frames(aprovados: list[dict]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Separa o resultado em identidade estável e cotações voláteis.
+
+    O portão precisa do preço do BDR para validar o par, mas esse preço não pode
+    ser gravado no `tickers.csv`: o arquivo fica em cache por meses e passaria a
+    carregar uma cotação velha que ninguém sabe que está velha. As cotações são
+    recoletadas a cada rodada e mescladas no `fundamentals.csv` por `ticker`.
+
+    Returns:
+        (pares, cotacoes) — o primeiro vai para data/<r>/tickers.csv.
+    """
+    if not aprovados:
+        vazio_pares = pd.DataFrame(columns=['ticker', 'ticker_bdr', 'razao', 'moeda'])
+        vazio_cot = pd.DataFrame(columns=['ticker', 'preco_bdr', 'liq_media_diaria_bdr'])
+        return vazio_pares, vazio_cot
+
+    df = pd.DataFrame(aprovados)
+    pares = df[['ticker', 'ticker_bdr', 'razao', 'moeda']].copy()
+
+    cotacoes = df[['ticker', 'preco_bdr']].copy()
+    # Liquidez do BDR em reais: preço e volume vêm os dois do pregão de B3, e
+    # é ela que diz se dá para comprar e vender o papel aqui. A liquidez do
+    # subjacente em Nova York não é negociável daqui e não entra em critério.
+    cotacoes['liq_media_diaria_bdr'] = df['preco_bdr'] * df['volume_bdr']
+
+    return pares, cotacoes
