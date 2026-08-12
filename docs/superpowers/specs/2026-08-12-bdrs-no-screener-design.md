@@ -2,8 +2,10 @@
 
 **Data:** 2026-08-12
 **Escopo:** novo balde de ativos (BDR) percorrendo o pipeline inteiro — universo, coleta, filtros,
-valuation e snapshot. Não altera o comportamento das ações e bancos brasileiros, exceto por uma
-refatoração das premissas macro (ver "Premissas por moeda"), necessária para o histórico não mentir.
+valuation e snapshot —, mais a reorganização de `data/` e `config/` em pastas por região. Não altera
+o comportamento das ações e bancos brasileiros, exceto por dois pontos: a refatoração das premissas
+macro (ver "Premissas por moeda"), necessária para o histórico não mentir, e a mudança de caminho
+dos arquivos que eles já usam.
 
 **Decisão estruturante: nenhuma conversão de moeda acontece em lugar nenhum.** Cada ativo é
 coletado, avaliado e exibido na moeda do seu próprio balanço. É o que torna o desenho válido para
@@ -158,7 +160,7 @@ negocia em USD e reporta em TWD. O P/L recalculado desses dois quebraria exatame
 yf.screen(region=BDR_REGION)          953 papéis (mcap > 500M, medição de 2026-08-12)
         │  filtra shortName ~ /DR[N123]\b/
         ▼
-   625 BDRs, 594 com longName          data/bdrs.csv (cache, padrão do data/tickers.csv)
+   625 BDRs, 594 com longName          (universo intermediário, não vira arquivo)
         │  o payload do screener já traz preço, volume e ações do BDR:
         │  nenhuma requisição extra para o lado brasileiro
         │
@@ -182,12 +184,16 @@ yf.screen(region=BDR_REGION)          953 papéis (mcap > 500M, medição de 202
   │ fundamentos      │ preço         │
   │ estimativas      │ liquidez      │
   └──────────────────┴───────────────┘
-        │
-        ▼  bdr_filters / bdr_bank_filters
+        │  par validado → data/us/tickers.csv
+        │  fundamentos  → data/us/fundamentals.csv
+        ▼
+        ▼  filtros de config/us/filters.json
         │
         ▼  valuation na moeda do balanço (RF e ERP daquela moeda)
         │
         ▼  preco_justo na mesma moeda — nenhuma conversão
+        │
+        ▼  snapshot → data/us/valuation_history.csv
 ```
 
 ### Identificação do BDR
@@ -237,8 +243,8 @@ adicional é feita ao ticker do BDR**:
 | ações do BDR (para a razão) | `sharesOutstanding` |
 | `ticker_bdr`, `longName` | `symbol`, `longName` |
 
-Isso importa para o custo da coleta: o "dois tickers por BDR" citado em "Onde os dados ficam" é o
-subjacente mais a busca, não uma terceira ida ao BDR.
+Isso importa para o custo da coleta: são duas idas por BDR — a busca do candidato e o `.info` do
+subjacente —, nunca uma terceira ao ticker do BDR.
 
 ### Portão de qualidade
 
@@ -279,53 +285,71 @@ condição, sem precisar de tratamento de subunidade em lugar nenhum.
 `RISK_FREE_RATE_<MOEDA>` e `EQUITY_RISK_PREMIUM_<MOEDA>` no `.env` é excluído, com log nomeando as
 variáveis que faltam. Habilitar um país é editar o `.env`; não há código a mudar.
 
-### Onde os dados ficam
+### Estrutura de arquivos por região
 
-**`data/fundamentals_bdr.csv`, separado de `data/fundamentals.csv`.** Duas razões:
+`data/` e `config/` passam a ser organizados em subpastas por região, e cada região é um pipeline
+autocontido:
 
-1. **O portão de cache é único.** `fetch_fundamentals` decide por `FUNDAMENTALS_CACHE.exists()` com
-   um só `force_refresh`. Unificados, atualizar as ações brasileiras obrigaria a recoletar todos os
-   BDRs — que custam dois tickers cada.
-2. Colunas exclusivas de BDR (`ticker_subjacente`, `razao`, `preco_bdr`, `liq_media_diaria_bdr`)
-   ficariam NaN nas 372 linhas brasileiras.
+```
+data/
+  br/  tickers.csv   fundamentals.csv   valuation_history.csv    ← os 3 arquivos de hoje, movidos
+  us/  tickers.csv   fundamentals.csv   valuation_history.csv    ← novo
 
-**`data/valuation_history.csv`, o mesmo arquivo.** Aqui unir é o certo e o mecanismo já existe: a
-célula 13 do notebook já carimba `tipo` (`'ação'` / `'banco'`), `_SNAPSHOT_RESULT_COLS` já inclui a
-coluna, e `append_snapshot` já alinha conjuntos de colunas diferentes por `concat` de propósito. O
-terceiro balde entra com `tipo = 'bdr'`.
+config/
+  br/  filters.json                                              ← o arquivo de hoje, movido
+  us/  filters.json                                              ← novo
+```
 
-### A coluna `moeda`, e por que a mistura é aceitável aqui
+**A região de uma pasta é onde o ticker é negociado**, não onde a busca começou. `data/us/` guarda
+`AAPL` e `MSFT` — os subjacentes —, descobertos a partir dos BDRs de B3. `BDR_REGION` continua sendo
+apenas o universo varrido pelo `yf.screen` (`br`), e a pasta de destino sai da bolsa do subjacente
+resolvido.
 
-`preco` e `preco_justo_dcf` passam a conter valores em moedas diferentes conforme a linha, e uma
-coluna `moeda` rotula cada uma. Isso contraria a regra que o resto desta spec aplica com rigor, e a
-diferença precisa estar explícita.
+Essa distinção é o que mantém o desenho viável: a Descoberta 2 mostrou que `yf.screen(region='us')`
+não enumera o mercado americano, então uma pasta de região **não** pode ser populada varrendo aquela
+região diretamente. Ela é populada pelo caminho que funciona — no caso de `us`, via BDR.
 
-O que torna a mistura da Descoberta 1 perigosa é ela ser **implícita e dentro da mesma conta**:
-nada no dado avisa que o numerador está em R$ e o denominador em US$, e o resultado sai com cara de
-P/L. Aqui a moeda está rotulada na própria linha, e **nenhuma operação cruza linhas de moedas
-diferentes**:
+**Adicionar uma região é criar as duas pastas**, não escrever código: as funções recebem a região e
+montam o caminho. Uma região sem `config/<regiao>/filters.json` é erro explícito, não silêncio.
 
-| operação | atravessa moedas? |
-|---|---|
-| `pl`, `pvp`, `roe_pct`, margens, `dl_ebit` | não — adimensionais |
-| `margem_seg_*` = `justo / preco − 1` | não — as duas pontas na mesma moeda |
-| ordenação do ranking | não — ordena `margem_seg_media_pct`, adimensional |
-| `compute_sector_averages` | mediana de `pl` e `pvp` — adimensionais |
-| `compute_sector_betas` | mediana de `beta_raw` — adimensional |
+O nome das pastas segue o código de região do `yf.screen` (`br`, `us`), em minúsculas, para não
+inventar um segundo vocabulário.
 
-A verificação das duas últimas foi feita lendo o código: ambas agregam apenas grandezas
-adimensionais, então a mistura de moedas não as corrompe.
+**Nota sobre `config/` e não `configs/`:** a pasta existente chama-se `config/`, e renomeá-la junto
+misturaria duas mudanças sem ganho. Se preferir `configs/`, é um `git mv` a mais no plano.
 
-Elas têm, ainda assim, um problema de **modelagem** — ver a seção seguinte.
+### O que cada arquivo carrega
 
-**Compatibilidade com o cache existente.** `data/fundamentals.csv` tem 372 linhas gravadas antes
-desta spec e **não** possui a coluna `moeda`. Código que a exija quebra ao ler o cache atual, e o
-sintoma seria um `KeyError` numa rodada que só queria reaproveitar dado já coletado. A leitura
-assume `BRL` quando a coluna está ausente — o que é verdade para todas as linhas já gravadas, já
-que o universo até aqui é inteiramente brasileiro. Coletas novas gravam a coluna a partir de
-`financialCurrency`.
+| arquivo | conteúdo | muda a cada rodada? |
+|---|---|---|
+| `data/<r>/tickers.csv` | identidade estável dos papéis da região | raramente |
+| `data/<r>/fundamentals.csv` | o retrato do trimestre | sim |
+| `data/<r>/valuation_history.csv` | snapshots append-only | sim |
 
-### Medianas setoriais são por balde, não do universo inteiro
+**O conteúdo difere entre regiões, de propósito.** `data/br/tickers.csv` tem `ticker` e `ticker_sa`.
+`data/us/tickers.csv` tem `ticker`, `ticker_bdr`, `razao` e `moeda` — o par validado pelo portão. A
+resolução e o portão rodam na construção desse arquivo e ficam em cache, exatamente como
+`get_tickers(force_refresh)` já faz hoje: recoletar fundamentos não revalida os pares.
+
+`data/us/fundamentals.csv` ganha `preco_bdr` e `liq_media_diaria_bdr` além das colunas comuns —
+valores voláteis, coletados a cada rodada, e por isso fora do `tickers.csv`.
+
+**Um `valuation_history.csv` por região**, e não um único arquivo com todas as linhas. Depois de
+retirarmos a conversão de moeda, cada histórico fica com uma moeda só, o que é mais forte do que a
+alternativa: não há nenhuma linha a rotular, porque não há nada misturado. O ranking unificado
+continua possível, concatenando na leitura do notebook — e aí sim as colunas `tipo` e `moeda`
+distinguem a origem de cada linha.
+
+`append_snapshot` já grava as premissas da rodada linha a linha e já alinha colunas por `concat`;
+passa a receber a região para montar o caminho.
+
+**Compatibilidade com o cache existente.** Os três arquivos de hoje vão para `data/br/` por `git mv`,
+preservando o histórico. `data/br/fundamentals.csv` tem 372 linhas gravadas antes desta spec e
+**não** possui a coluna `moeda`; código que a exija quebra com `KeyError` numa rodada que só queria
+reaproveitar dado já coletado. A leitura assume `BRL` quando a coluna está ausente — verdade para
+todas as linhas já gravadas. Coletas novas gravam a coluna a partir de `financialCurrency`.
+
+### Medianas setoriais são por região
 
 `graham_valuation` multiplica o P/L e o P/VP medianos do setor. Se as medianas forem calculadas
 sobre ações brasileiras e estrangeiras juntas, o P/L mediano de "Technology" no Brasil entra na
@@ -335,15 +359,49 @@ Não é erro de unidade — é comparar a empresa com um mercado que não é o d
 erro cai no lado seguro (preço justo menor esconde a ação em vez de recomendá-la), mas esconder
 justamente os papéis que a funcionalidade existe para mostrar anula a funcionalidade.
 
-`apply_valuation(df, all_fundamentals, model=...)` já recebe o frame das medianas como argumento
-separado. Basta o notebook passar `fundamentals_bdr` no balde de BDR, em vez do frame brasileiro. É
-uma linha, e nenhum código novo.
+A separação por pastas resolve isso por construção: `apply_valuation(df, all_fundamentals, ...)` já
+recebe o frame das medianas como argumento separado, e o frame de uma região é o `fundamentals.csv`
+daquela região. Não há código novo, e não há como misturar sem escrever o caminho errado de
+propósito.
+
+### Onde a mistura de moedas pode aparecer
+
+Dentro de um arquivo, nunca: cada pasta de região tem uma moeda só. A mistura existe apenas na visão
+concatenada do notebook, onde `preco` e `preco_justo_dcf` carregam moedas diferentes por linha e a
+coluna `moeda` rotula cada uma.
+
+O que torna a mistura da Descoberta 1 perigosa é ela ser **implícita e dentro da mesma conta**: nada
+no dado avisa que o numerador está em R$ e o denominador em US$, e o resultado sai com cara de P/L.
+Na visão concatenada a moeda está rotulada e **nenhuma operação cruza linhas**:
+
+| operação | atravessa moedas? |
+|---|---|
+| `pl`, `pvp`, `roe_pct`, margens, `dl_ebit` | não — adimensionais |
+| `margem_seg_*` = `justo / preco − 1` | não — as duas pontas na mesma moeda |
+| ordenação do ranking | não — ordena `margem_seg_media_pct`, adimensional |
+| `compute_sector_averages` | mediana de `pl` e `pvp` — adimensionais, e agora por região |
+| `compute_sector_betas` | mediana de `beta_raw` — adimensional, e agora por região |
+
+A verificação das duas últimas foi feita lendo o código: ambas agregam apenas grandezas
+adimensionais, então nem a mistura as corromperia.
 
 ## Filtros
 
-Blocos novos em `config/filters.json`: `bdr_filters` e `bdr_bank_filters`, espelhando a divisão
-entre `stock_filters` e `bank_filters` que já existe — para `JPMC34`, `USBC34` e `WFCO34`,
-`dl_ebit` e `liquidez_corrente` não significam nada, pelo mesmo motivo de sempre.
+A separação por pasta elimina a necessidade de blocos novos. `config/us/filters.json` reusa as
+mesmas chaves `stock_filters` e `bank_filters` de `config/br/filters.json`, e o que muda é a pasta
+de onde o arquivo é lido:
+
+```python
+apply_stock_filters(df, region='us')   # lê config/us/filters.json
+apply_bank_filters(df, region='us')
+```
+
+Não existe `apply_bdr_filters`, nem bloco `bdr_filters`. A divisão banco/não-banco continua valendo
+por região — para `JPMC34`, `USBC34` e `WFCO34`, `dl_ebit` e `liquidez_corrente` não significam
+nada, pelo mesmo motivo de sempre.
+
+Uma região sem `config/<regiao>/filters.json` levanta erro nomeando o caminho ausente. Silenciar
+com defaults faria uma região nova ser filtrada por critérios que ninguém escolheu.
 
 **Limiares idênticos aos das ações brasileiras** (`pl_max: 10`, `pvp_max: 1.5`, `roe_pct_min: 10`,
 `margem_liquida_pct_min: 10`). A premissa é que o critério de "barato" é do investidor, não do
@@ -351,19 +409,24 @@ mercado: se a bolsa americana quase não produz empresa a 10x lucro, a lista vem
 curta é informação. Escolher limiares porque produzem uma lista de tamanho agradável é exatamente o
 ajuste à amostra que a Guideline 3 proíbe.
 
-**Liquidez é do BDR, em reais, nunca do subjacente.** O corte lê `liq_media_diaria_bdr`. Isso
-resolve dois problemas de uma vez. O prático: um BDR não-patrocinado de uma empresa excelente pode
-negociar poucos milhares de reais por dia enquanto o subjacente movimenta dezenas de milhões em
-Nova York, e filtrar pela liquidez de lá aprovaria um papel que não se compra nem se vende. O de
-unidade: `liq_media_diaria_min: 100000` é um valor em reais, e só faz sentido contra uma grandeza
-em reais — comparar com a liquidez do subjacente em USD, TWD ou JPY seria comparar número com
-número, sem significado. A liquidez do subjacente não entra em critério nenhum.
+**Liquidez é do BDR, em reais, nunca do subjacente.** Em `config/us/filters.json` o corte chama-se
+`liq_media_diaria_bdr_min` e lê a coluna `liq_media_diaria_bdr`. Isso resolve dois problemas de uma
+vez. O prático: um BDR não-patrocinado de uma empresa excelente pode negociar poucos milhares de
+reais por dia enquanto o subjacente movimenta dezenas de milhões em Nova York, e filtrar pela
+liquidez de lá aprovaria um papel que não se compra nem se vende. O de unidade: 100000 é um valor em
+reais, e só faz sentido contra uma grandeza em reais — comparar com a liquidez do subjacente em USD,
+TWD ou JPY seria comparar número com número, sem significado. A liquidez do subjacente não entra em
+critério nenhum.
+
+O nome com sufixo `_bdr` é deliberado: é o único critério do arquivo `us` cujo valor está em reais,
+e o sufixo impede que ele seja lido como "cem mil dólares" por quem editar o arquivo depois.
 
 **`dy_pct` é bruto e não filtra.** O dividendo de empresa estrangeira sofre retenção na fonte antes
 de chegar ao detentor do BDR (30% no caso americano), então o `dividendYield` do yfinance é o
-rendimento do acionista local. A coluna é exibida com o rótulo dizendo que é bruta, e
-`bdr_bank_filters` não usa `dy_pct_min`. Modelar tributação por país está fora do escopo, e filtrar
-por um número inflado seria pior que não filtrar.
+rendimento do acionista local. A coluna é exibida com o rótulo dizendo que é bruta, e o
+`bank_filters` de `config/us/` omite `dy_pct_min` — diferença deliberada em relação ao de
+`config/br/`, que o exige. Modelar tributação por país está fora do escopo, e filtrar por um número
+inflado seria pior que não filtrar.
 
 Os critérios adimensionais (margem EBIT, margem líquida, ROE, P/VP, DL/EBIT, DL/PL,
 passivos/ativos, liquidez corrente) atravessam sem alteração de semântica.
@@ -458,13 +521,17 @@ suficiente para o leitor ver a origem de cada linha.
 
 | arquivo | responsabilidade |
 |---|---|
-| `src/bdrs.py` (novo) | universo via screener, marcador `DR[N123]`, resolução do par, portão de qualidade, elegibilidade por moeda, cache `data/bdrs.csv` |
-| `src/fundamentals.py` | `fetch_betas` recebe o índice como parâmetro; `fetch_fundamentals` recebe o caminho do cache como parâmetro (hoje `FUNDAMENTALS_CACHE` é fixo no módulo) e passa a gravar `moeda` a partir de `financialCurrency`; o corpo da coleta é reaproveitado sem alteração |
-| `src/valuation.py` | premissas macro resolvidas por moeda; snapshot gravando as premissas efetivamente usadas em cada linha |
-| `src/filters.py` | `apply_bdr_filters`, lendo `bdr_filters` / `bdr_bank_filters` |
-| `config/filters.json` | dois blocos novos |
+| `src/bdrs.py` (novo) | universo via screener, marcador `DR[N123]\b`, resolução do par, portão de qualidade, elegibilidade por moeda; escreve `data/us/tickers.csv` |
+| `src/paths.py` (novo) | resolve `data/<regiao>/<arquivo>` e `config/<regiao>/filters.json`; único lugar que sabe o formato dos caminhos |
+| `src/scraper.py` | `get_tickers` recebe a região e lê/escreve `data/<r>/tickers.csv` |
+| `src/fundamentals.py` | `fetch_betas` recebe o índice como parâmetro; `fetch_fundamentals` recebe a região (hoje `FUNDAMENTALS_CACHE` é fixo no módulo) e passa a gravar `moeda` a partir de `financialCurrency`; o corpo da coleta é reaproveitado sem alteração |
+| `src/valuation.py` | premissas macro resolvidas por moeda; `append_snapshot` recebe a região; snapshot gravando as premissas efetivamente usadas em cada linha |
+| `src/filters.py` | `apply_stock_filters` e `apply_bank_filters` recebem a região; nenhuma função nova |
+| `config/br/filters.json` | o arquivo de hoje, movido por `git mv` |
+| `config/us/filters.json` | novo: mesmas chaves, `liq_media_diaria_bdr_min` no lugar de `liq_media_diaria_min`, `bank_filters` sem `dy_pct_min` |
+| `data/br/*` | os 3 arquivos de hoje, movidos por `git mv` |
 | `.env.example` | `RISK_FREE_RATE_USD`, `EQUITY_RISK_PREMIUM_USD`, `BDR_REGION` |
-| `analysis.ipynb` | terceiro balde com `tipo = 'bdr'`; medianas setoriais do balde de BDR vindas de `fundamentals_bdr` |
+| `analysis.ipynb` | terceiro balde com `tipo = 'bdr'`; leitura por região; concatenação para o ranking unificado |
 
 `src/bdrs.py` é o único módulo com lógica nova. Sua fronteira é estreita: recebe uma região e
 devolve um DataFrame já validado, com uma linha por par aprovado e as colunas
@@ -526,9 +593,15 @@ construídos à mão — nunca sobre o cache, pela Guideline 3.
   empresa: trava a separação por balde
 
 **`src/filters.py`**
-- `apply_bdr_filters` corta por `liq_media_diaria_bdr` e ignora `liq_media_diaria`
-- `bdr_bank_filters` não aplica `dl_ebit` nem `liquidez_corrente`
+- `apply_stock_filters(df, region='us')` lê `config/us/filters.json`, e `region='br'` lê o de `br`
+- região sem `config/<regiao>/filters.json` levanta erro nomeando o caminho, em vez de usar defaults
+- o corte de liquidez da região `us` usa `liq_media_diaria_bdr` e ignora `liq_media_diaria`
+- `bank_filters` de `us` não aplica `dy_pct_min`; o de `br` aplica
 - NaN reprova nos critérios exigidos, como já vale para `_estimates_mask`
+
+**`src/paths.py`**
+- monta `data/<r>/<arquivo>` e `config/<r>/filters.json` para regiões arbitrárias
+- região com nome vazio ou com separador de caminho é rejeitada, para o nome não escapar da pasta
 
 ## Fora de escopo
 
