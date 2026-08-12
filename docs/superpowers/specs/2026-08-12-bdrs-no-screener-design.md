@@ -1,7 +1,7 @@
 # BDRs no screener: fundamento estrangeiro, na moeda de origem
 
 **Data:** 2026-08-12
-**Escopo:** novo balde de ativos (BDR) percorrendo o pipeline inteiro — universo, coleta, filtros,
+**Escopo:** nova região de ativos, alcançada via BDR, percorrendo o pipeline inteiro — universo, coleta, filtros,
 valuation e snapshot —, mais a reorganização de `data/` e `config/` em pastas por região. Não altera
 o comportamento das ações e bancos brasileiros, exceto por dois pontos: a refatoração das premissas
 macro (ver "Premissas por moeda"), necessária para o histórico não mentir, e a mudança de caminho
@@ -186,7 +186,7 @@ yf.screen(region=BDR_REGION)          953 papéis (mcap > 500M, medição de 202
   └──────────────────┴───────────────┘
         │  par validado → data/us/tickers.csv
         │  fundamentos  → data/us/fundamentals.csv
-        ▼
+        │
         ▼  filtros de config/us/filters.json
         │
         ▼  valuation na moeda do balanço (RF e ERP daquela moeda)
@@ -310,7 +310,20 @@ não enumera o mercado americano, então uma pasta de região **não** pode ser 
 região diretamente. Ela é populada pelo caminho que funciona — no caso de `us`, via BDR.
 
 **Adicionar uma região é criar as duas pastas**, não escrever código: as funções recebem a região e
-montam o caminho. Uma região sem `config/<regiao>/filters.json` é erro explícito, não silêncio.
+montam o caminho.
+
+**Região pedida e região descoberta se comportam de formas diferentes** quando falta o
+`config/<regiao>/filters.json`, e a distinção é necessária:
+
+| origem da região | falta o `filters.json` | por quê |
+|---|---|---|
+| **pedida** — você chamou o pipeline com ela | erro, nomeando o caminho | você pediu por aquela região; filtrar por defaults que ninguém escolheu seria pior que parar |
+| **descoberta** — um subjacente resolveu para lá | os papéis daquela região são excluídos, com log | não foi uma escolha sua, e derrubar a rodada inteira por causa dela seria desproporcional |
+
+Sem essa separação, **um único BDR que resolvesse para uma bolsa de Londres derrubaria a coleta
+toda**, porque `config/gb/filters.json` não existe. A maioria dos subjacentes resolve para listagem
+americana, inclusive os europeus e asiáticos via ADR (`UL`, `TSM`, `UBS`, `YPF` na Descoberta 4),
+mas "a maioria" não é garantia — e o modo de falha seria a rodada inteira, não o papel.
 
 O nome das pastas segue o código de região do `yf.screen` (`br`, `us`), em minúsculas, para não
 inventar um segundo vocabulário.
@@ -334,14 +347,32 @@ resolução e o portão rodam na construção desse arquivo e ficam em cache, ex
 `data/us/fundamentals.csv` ganha `preco_bdr` e `liq_media_diaria_bdr` além das colunas comuns —
 valores voláteis, coletados a cada rodada, e por isso fora do `tickers.csv`.
 
-**Um `valuation_history.csv` por região**, e não um único arquivo com todas as linhas. Depois de
-retirarmos a conversão de moeda, cada histórico fica com uma moeda só, o que é mais forte do que a
-alternativa: não há nenhuma linha a rotular, porque não há nada misturado. O ranking unificado
-continua possível, concatenando na leitura do notebook — e aí sim as colunas `tipo` e `moeda`
-distinguem a origem de cada linha.
+**Um `valuation_history.csv` por região**, e não um único arquivo com todas as linhas. Dentro de um
+arquivo, **cada coluna tem uma moeda só, igual em todas as linhas**: em `data/us/`, `preco` e
+`preco_justo_dcf` são dólar da primeira à última linha, enquanto `preco_bdr` e
+`liq_media_diaria_bdr` são reais da primeira à última. Nenhuma coluna muda de moeda conforme a
+linha, que é a propriedade que importa — e é ela que se perderia num arquivo único, onde `preco`
+seria R$ em algumas linhas e US$ em outras.
+
+O ranking unificado continua possível, concatenando na leitura do notebook. É só lá que `preco`
+passa a carregar moedas diferentes por linha, e é por isso que a coluna `moeda` existe.
 
 `append_snapshot` já grava as premissas da rodada linha a linha e já alinha colunas por `concat`;
 passa a receber a região para montar o caminho.
+
+### `tipo` continua sendo ação ou banco; a região é outra coluna
+
+A região `us` tem ações **e** bancos — `JPMC34`, `USBC34` e `WFCO34` existem, e a seção "Filtros"
+mantém a divisão banco/não-banco em toda região. Carimbar `tipo = 'bdr'` destruiria justamente essa
+distinção: um banco americano ficaria indistinguível de uma varejista americana na coluna que existe
+para separar os dois.
+
+Então `tipo` mantém os valores `'ação'` e `'banco'`, e uma coluna nova `regiao` diz de onde a linha
+veio. As duas são ortogonais, e é isso que permite perguntar "bancos americanos" ou "tudo do Brasil"
+sem cruzar as colunas de cabeça.
+
+Para as 372 linhas brasileiras já gravadas, `regiao` ausente significa `br` — mesma regra de
+compatibilidade da coluna `moeda`.
 
 **Compatibilidade com o cache existente.** Os três arquivos de hoje vão para `data/br/` por `git mv`,
 preservando o histórico. `data/br/fundamentals.csv` tem 372 linhas gravadas antes desta spec e
@@ -366,9 +397,9 @@ propósito.
 
 ### Onde a mistura de moedas pode aparecer
 
-Dentro de um arquivo, nunca: cada pasta de região tem uma moeda só. A mistura existe apenas na visão
-concatenada do notebook, onde `preco` e `preco_justo_dcf` carregam moedas diferentes por linha e a
-coluna `moeda` rotula cada uma.
+Dentro de um arquivo, nunca: nenhuma coluna muda de moeda conforme a linha. A mistura existe apenas
+na visão concatenada do notebook, onde `preco` e `preco_justo_dcf` passam a carregar moedas
+diferentes por linha e a coluna `moeda` rotula cada uma.
 
 O que torna a mistura da Descoberta 1 perigosa é ela ser **implícita e dentro da mesma conta**: nada
 no dado avisa que o numerador está em R$ e o denominador em US$, e o resultado sai com cara de P/L.
@@ -530,16 +561,17 @@ Descontar a 4,2% em vez de 12,4% produz preço justo estruturalmente mais alto e
 Como o top-20 ordena por `margem_seg_media_pct`, **os BDRs que chegarem ao ranking tendem a chegar
 por cima**.
 
-Quantos chegam é outra questão, e as duas decisões desta spec puxam em sentidos opostos: os
-limiares idênticos (`pl_max: 10`) devem deixar passar poucos papéis americanos, enquanto o custo de
-capital menor eleva a margem de quem passa. O resultado combinado — lista curta e concentrada no
-topo, ou lista curta e irrelevante — **não é previsível sem rodar**, e nenhuma das duas decisões
-foi tomada olhando para esse resultado, o que a Guideline 3 proíbe. A primeira execução responde.
-
-Não é defeito do modelo. Reflete um fato: ativo brasileiro precisa render mais porque o juro em
+Isso não é defeito do modelo. Reflete um fato: ativo brasileiro precisa render mais porque o juro em
 reais é maior, então uma ação daqui tem que estar genuinamente mais barata para empatar com uma de
-lá. A comparação entre baldes é legítima, e é justamente o que a ausência de conversão preserva —
+lá. A comparação entre regiões é legítima, e é justamente o que a ausência de conversão preserva —
 margem de segurança é adimensional e não depende de nenhuma cotação.
+
+Quantos BDRs chegam ao ranking é outra questão, e as duas decisões desta spec puxam em sentidos
+opostos: os limiares idênticos (`pl_max: 10`) devem deixar passar poucos papéis americanos, enquanto
+o custo de capital menor eleva a margem de quem passa. O resultado combinado — lista curta e
+concentrada no topo, ou lista curta e irrelevante — **não é previsível sem rodar**, e nenhuma das
+duas decisões foi tomada olhando para esse resultado, o que a Guideline 3 proíbe. A primeira
+execução responde.
 
 **Nenhuma normalização será aplicada.** Qualquer ajuste para "equilibrar" a lista seria escolher o
 resultado antes de calculá-lo. As colunas `tipo` e `moeda` ficam visíveis no ranking, que é o
@@ -559,14 +591,30 @@ suficiente para o leitor ver a origem de cada linha.
 | `config/us/filters.json` | novo: mesmas chaves, `liq_media_diaria_bdr_min` no lugar de `liq_media_diaria_min`, `bank_filters` sem `dy_pct_min` |
 | `data/br/*` | os 3 arquivos de hoje, movidos por `git mv` |
 | `.env.example` | `RISK_FREE_RATE_USD`, `EQUITY_RISK_PREMIUM_USD`, `BDR_REGION` |
-| `analysis.ipynb` | terceiro balde com `tipo = 'bdr'`; leitura por região; concatenação para o ranking unificado |
+| `analysis.ipynb` | pipeline da região `us` (ações e bancos), leitura por região, coluna `regiao`, concatenação para o ranking unificado |
 
-`src/bdrs.py` é o único módulo com lógica nova. Sua fronteira é estreita: recebe uma região e
-devolve um DataFrame já validado, com uma linha por par aprovado e as colunas
-`ticker_bdr`, `ticker_subjacente`, `razao`, `moeda`, `preco_bdr` e `liq_media_diaria_bdr` — as duas
-últimas vindas do payload do screener, como descrito em "As colunas do lado brasileiro saem do
-próprio screener". Quem consome não precisa saber nada sobre screener, marcadores, tolerâncias ou
-elegibilidade.
+`src/bdrs.py` é o único módulo com lógica nova. Recebe uma região de varredura e devolve **dois
+frames**, porque os dados que ele produz têm tempos de vida diferentes:
+
+| frame | colunas | destino | validade |
+|---|---|---|---|
+| pares | `ticker`, `ticker_bdr`, `razao`, `moeda` | `data/<r>/tickers.csv` | estável, fica em cache |
+| cotações | `ticker`, `preco_bdr`, `liq_media_diaria_bdr` | mesclado em `fundamentals.csv` na coleta | volátil, recoletado a cada rodada |
+
+A separação não é burocracia: o portão precisa de preço para validar o par, mas o preço que ele usou
+não pode ser gravado no `tickers.csv`, senão o arquivo "estável" carregaria uma cotação de meses
+atrás que ninguém sabe que está velha. O `fetch_fundamentals` da região traz as cotações frescas e
+as junta por `ticker`.
+
+Quem consome não precisa saber nada sobre screener, marcadores, tolerâncias ou elegibilidade.
+
+**Custo de rede, declarado:** `bdrs.py` faz duas requisições por BDR candidato (a busca e o `.info`
+do subjacente, este último necessário para o `financialCurrency` da elegibilidade), e
+`fetch_fundamentals` busca o `.info` do mesmo subjacente de novo. São ~594 requisições duplicadas
+numa reconstrução completa do `tickers.csv`. Aceito de propósito: eliminar a duplicata exigiria
+`bdrs.py` devolver o `.info` inteiro e `fetch_fundamentals` aceitar dado pré-buscado, acoplando os
+dois módulos por causa de um custo que só aparece quando o cache de pares é reconstruído — o que é
+raro, como no `get_tickers` de hoje.
 
 ## Tratamento de erro
 
@@ -607,6 +655,10 @@ construídos à mão — nunca sobre o cache, pela Guideline 3.
   passou nos filtros"
 - `currency != financialCurrency` exclui, mesmo com o portão aprovado
 - moeda sem premissas no `.env` exclui, e a mensagem nomeia as variáveis faltantes
+- região **descoberta** sem `config/<r>/filters.json` exclui só aqueles papéis; região **pedida** sem
+  o arquivo levanta erro — um BDR resolvido para Londres não pode derrubar a rodada
+- os dois frames devolvidos são disjuntos: `tickers.csv` não recebe `preco_bdr` nem
+  `liq_media_diaria_bdr`, para o arquivo estável não guardar cotação velha
 - BDR sem candidato não aparece na saída
 - reprovado não aparece na saída **com dado parcial** — a asserção é sobre ausência da linha
 
@@ -618,7 +670,10 @@ construídos à mão — nunca sobre o cache, pela Guideline 3.
 - margem de segurança de um par BDR/subjacente é a mesma calculada em qualquer das duas moedas —
   trava a invariância que substitui a conversão
 - medianas setoriais vindas de frames distintos produzem preços de Graham distintos para a mesma
-  empresa: trava a separação por balde
+  empresa: trava a separação por região
+- `tipo` de um banco americano é `'banco'`, não `'bdr'`, e `regiao` é `'us'` — trava a
+  ortogonalidade das duas colunas
+- linha antiga sem `regiao` é lida como `br`, como a linha sem `moeda` é lida como `BRL`
 
 **`src/filters.py`**
 - `apply_stock_filters(df, region='us')` lê `config/us/filters.json`, e `region='br'` lê o de `br`
@@ -641,7 +696,7 @@ construídos à mão — nunca sobre o cache, pela Guideline 3.
 - Modelagem de tributação (retenção na fonte sobre dividendo, IOF, ganho de capital)
 - Tratamento de subunidades monetárias (`GBp`, `ILA`, `ZAc`): os papéis afetados já saem pela
   divergência entre pregão e balanço
-- Normalização do ranking entre baldes
+- Normalização do ranking entre regiões
 - Reclassificação dos BDRs de empresa brasileira (`JBSS32`, `XPBR31`, `INBR32`, `ROXO34`,
   `AURA33`): passam pelo mesmo caminho dos demais, sem tratamento próprio, ainda que sua operação
   seja no Brasil
