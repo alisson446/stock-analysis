@@ -262,3 +262,34 @@ class TestLiquidityMask:
         df = pd.DataFrame({'liq_media_diaria': [1]})
         with pytest.raises(KeyError):
             filters._liquidity_mask(df, {'pl_max': 10})
+
+
+class TestConfigDaRegiaoUS:
+    """
+    Os limiares são idênticos aos brasileiros por premissa: o critério de
+    'barato' é do investidor, não do mercado. Se a bolsa americana quase não
+    produz empresa a 10x lucro, a lista vem curta — e lista curta é informação.
+    """
+
+    def test_existe_e_tem_as_mesmas_chaves_de_bloco(self):
+        us = filters._load_config('us')
+        br = filters._load_config('br')
+        assert set(us) == set(br) == {'stock_filters', 'bank_filters'}
+
+    def test_limiares_de_barato_sao_iguais_aos_do_br(self):
+        us = filters._load_config('us')['stock_filters']
+        br = filters._load_config('br')['stock_filters']
+        for chave in ('pl_max', 'pvp_max', 'roe_pct_min', 'margem_liquida_pct_min'):
+            assert us[chave] == br[chave]
+
+    def test_liquidez_e_a_do_bdr_em_reais(self):
+        for bloco in ('stock_filters', 'bank_filters'):
+            cfg = filters._load_config('us')[bloco]
+            assert 'liq_media_diaria_bdr_min' in cfg
+            assert 'liq_media_diaria_min' not in cfg
+
+    def test_bank_filters_do_us_nao_tem_dy_pct_min(self):
+        # O dividendo estrangeiro sofre retenção antes de chegar ao detentor do
+        # BDR, então o dividendYield do yfinance é o do acionista de lá.
+        assert 'dy_pct_min' not in filters._load_config('us')['bank_filters']
+        assert 'dy_pct_min' in filters._load_config('br')['bank_filters']
