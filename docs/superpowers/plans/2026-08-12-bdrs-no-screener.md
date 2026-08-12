@@ -427,7 +427,9 @@ Expected: FAIL — `get_tickers() got an unexpected keyword argument 'region'`
 
 ```bash
 mkdir -p data/br
-git mv data/tickers.csv data/br/tickers.csv
+# mv simples, nao git mv: data/ esta no .gitignore e os CSVs nao sao
+# rastreados, entao nao ha historico a preservar e git mv falharia.
+mv data/tickers.csv data/br/tickers.csv
 ```
 
 Em `src/scraper.py`, troque as linhas 8-9 e as funções de cache:
@@ -487,7 +489,7 @@ Expected: PASS (3 testes)
 - [ ] **Step 5: Commit**
 
 ```bash
-git add data/br/tickers.csv src/scraper.py tests/test_scraper.py
+git add src/scraper.py tests/test_scraper.py   # data/ e gitignored
 git commit -m "feat: cache de tickers por regiao em data/<r>/tickers.csv"
 ```
 
@@ -555,7 +557,7 @@ Expected: FAIL — `fetch_fundamentals() got an unexpected keyword argument 'reg
 - [ ] **Step 3: Mover o arquivo e implementar**
 
 ```bash
-git mv data/fundamentals.csv data/br/fundamentals.csv
+mv data/fundamentals.csv data/br/fundamentals.csv   # nao rastreado: mv simples
 ```
 
 Em `src/fundamentals.py`, troque as linhas 8-9 por:
@@ -659,7 +661,7 @@ Expected: PASS — os testes existentes continuam passando e os 3 novos passam
 - [ ] **Step 5: Commit**
 
 ```bash
-git add data/br/fundamentals.csv src/fundamentals.py tests/test_fundamentals.py
+git add src/fundamentals.py tests/test_fundamentals.py   # data/ e gitignored
 git commit -m "feat: fundamentals por regiao, com coluna moeda e indice do beta"
 ```
 
@@ -927,7 +929,7 @@ Expected: FAIL — `append_snapshot() got an unexpected keyword argument 'region
 - [ ] **Step 3: Mover o arquivo e implementar**
 
 ```bash
-git mv data/valuation_history.csv data/br/valuation_history.csv
+mv data/valuation_history.csv data/br/valuation_history.csv   # nao rastreado: mv simples
 ```
 
 Em `src/valuation.py`, troque as linhas 660-661 por:
@@ -1016,7 +1018,7 @@ Expected: PASS — os existentes continuam passando e os 7 novos passam
 - [ ] **Step 5: Commit**
 
 ```bash
-git add data/br/valuation_history.csv src/valuation.py tests/test_valuation.py
+git add src/valuation.py tests/test_valuation.py   # data/ e gitignored
 git commit -m "feat: snapshot por regiao, com premissas resolvidas por linha"
 ```
 
@@ -2215,7 +2217,7 @@ Expected: execução sem exceção; a saída deve imprimir a contagem de BDRs ap
 - [ ] **Step 5: Commit**
 
 ```bash
-git add analysis.ipynb src/bdrs.py tests/test_bdrs.py data/us/
+git add analysis.ipynb src/bdrs.py tests/test_bdrs.py   # data/ e gitignored
 git commit -m "feat: pipeline da regiao us no notebook, com ranking unificado"
 ```
 
@@ -2225,7 +2227,7 @@ git commit -m "feat: pipeline da regiao us no notebook, com ranking unificado"
 
 **Ordem obrigatória.** As tasks 1-6 são o alicerce (caminhos por região e premissas por moeda) e precisam vir antes das 7-12. Dentro de 7-10, cada uma acrescenta uma função a `src/bdrs.py` e depende da anterior apenas para o módulo existir.
 
-**As tasks 2-6 movem arquivos rastreados pelo git.** Use `git mv`, não `mv`, para o histórico do arquivo seguir junto.
+**Só `config/filters.json` é rastreado pelo git** — ele vai para `config/br/` com `git mv` (Task 2). Os três CSVs de `data/` estão no `.gitignore`: movem-se com `mv` simples, e não entram em nenhum `git add`.
 
 **Ponto de atenção na Task 12.** A célula de resolução é a única que faz ~1200 requisições (duas por BDR). Ela é pulada quando `data/us/tickers.csv` existe. Na primeira execução, contar com dezenas de minutos.
 

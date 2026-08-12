@@ -15,3 +15,6 @@ venv/
 
 # cache
 data/
+
+# worktrees criados pelo Claude Code
+.claude/worktrees/

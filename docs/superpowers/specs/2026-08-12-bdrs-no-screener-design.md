@@ -374,8 +374,9 @@ sem cruzar as colunas de cabeça.
 Para as 372 linhas brasileiras já gravadas, `regiao` ausente significa `br` — mesma regra de
 compatibilidade da coluna `moeda`.
 
-**Compatibilidade com o cache existente.** Os três arquivos de hoje vão para `data/br/` por `git mv`,
-preservando o histórico. `data/br/fundamentals.csv` tem 372 linhas gravadas antes desta spec e
+**Compatibilidade com o cache existente.** Os três arquivos de hoje vão para `data/br/` por `mv`
+simples — `data/` está no `.gitignore` e nenhum deles é rastreado, então não há histórico de git a
+preservar e `git mv` falharia com "not under version control". `data/br/fundamentals.csv` tem 372 linhas gravadas antes desta spec e
 **não** possui a coluna `moeda`; código que a exija quebra com `KeyError` numa rodada que só queria
 reaproveitar dado já coletado. A leitura assume `BRL` quando a coluna está ausente — verdade para
 todas as linhas já gravadas. Coletas novas gravam a coluna a partir de `financialCurrency`.
