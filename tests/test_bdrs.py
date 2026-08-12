@@ -279,6 +279,40 @@ class TestMotivoInelegibilidade:
             bdrs.motivo_inelegibilidade('USD', 'USD', 'us', {'us'})
 
 
+class TestRegiaoDoTicker:
+    @pytest.mark.parametrize('ticker,esperado', [
+        ('AAPL', 'us'), ('JPM', 'us'), ('PETR4.SA', 'br'),
+        ('AZN.L', 'gb'), ('SAP.DE', 'de'), ('7203.T', 'jp'),
+        ('XXXX.ZZ', 'desconhecida'),
+    ])
+    def test_sufixo_decide_a_regiao(self, ticker, esperado):
+        assert bdrs.regiao_do_ticker(ticker) == esperado
+
+
+class TestRazaoAcoesDoPar:
+    def test_divide_as_contagens(self):
+        assert bdrs.razao_acoes_do_par(291_883_600_000, 14_594_180_000) == pytest.approx(20.0)
+
+    @pytest.mark.parametrize('a,b', [(None, 10), (10, None), (10, 0), (np.nan, 10)])
+    def test_faltando_um_lado_devolve_nan(self, a, b):
+        assert pd.isna(bdrs.razao_acoes_do_par(a, b))
+
+
+class TestResumoPorRegiao:
+    """A taxa medida valeu só para bolsas americanas; o resumo é o que revela
+    a das demais praças na primeira rodada real."""
+
+    def test_conta_candidatos_e_aprovados_por_regiao(self):
+        candidatos = [{'regiao': 'us'}, {'regiao': 'us'}, {'regiao': 'gb'}]
+        aprovados = [{'regiao': 'us'}]
+
+        resumo = bdrs.resumo_por_regiao(candidatos, aprovados)
+
+        por_regiao = resumo.set_index('regiao').to_dict('index')
+        assert por_regiao['us'] == {'candidatos': 2, 'aprovados': 1, 'taxa_pct': 50.0}
+        assert por_regiao['gb'] == {'candidatos': 1, 'aprovados': 0, 'taxa_pct': 0.0}
+
+
 class TestMontarFrames:
     """
     Os dois frames têm tempos de vida diferentes: o par é estável e vai para o

@@ -246,6 +246,58 @@ def motivo_inelegibilidade(moeda_pregao: str, moeda_balanco: str, regiao: str,
     return None
 
 
+# Sufixo do ticker -> região da bolsa. Ticker sem ponto é americano, que é
+# onde a maioria dos subjacentes negocia, inclusive europeus e asiáticos via
+# ADR (UL, TSM, UBS, YPF).
+_REGIAO_POR_SUFIXO = {
+    'SA': 'br', 'L': 'gb', 'DE': 'de', 'PA': 'fr', 'SW': 'ch',
+    'T': 'jp', 'AX': 'au', 'TO': 'ca', 'HK': 'hk', 'MX': 'mx',
+}
+
+
+def regiao_do_ticker(ticker: str) -> str:
+    """Região da bolsa em que o ticker negocia, pelo sufixo do símbolo."""
+    if '.' not in ticker:
+        return 'us'
+    return _REGIAO_POR_SUFIXO.get(ticker.rsplit('.', 1)[1].upper(), 'desconhecida')
+
+
+def razao_acoes_do_par(shares_bdr: float, shares_subjacente: float) -> float:
+    """
+    Quantos BDRs equivalem a uma ação, pelo número de ações de cada lado.
+
+    O yfinance já entrega o `sharesOutstanding` do BDR em unidades de BDR
+    (AAPL34: 291,88 bi contra 14,59 bi da AAPL), então a divisão dá a razão
+    direto — 20, no caso.
+    """
+    for valor in (shares_bdr, shares_subjacente):
+        if valor is None or pd.isna(valor) or valor == 0:
+            return np.nan
+    return shares_bdr / shares_subjacente
+
+
+def resumo_por_regiao(candidatos: list[dict], aprovados: list[dict]) -> pd.DataFrame:
+    """
+    Taxa de aprovação por região de bolsa do subjacente.
+
+    Existe porque a única medição feita até aqui restringiu os candidatos a
+    bolsas americanas, e aprovou 21 de 22. Para as demais praças a taxa é
+    DESCONHECIDA — imprimi-la a cada rodada é o que faz isso deixar de ser
+    suposição na primeira execução real.
+    """
+    total = {}
+    for c in candidatos:
+        total[c['regiao']] = total.get(c['regiao'], 0) + 1
+    ok = {}
+    for a in aprovados:
+        ok[a['regiao']] = ok.get(a['regiao'], 0) + 1
+
+    linhas = [{'regiao': r, 'candidatos': n, 'aprovados': ok.get(r, 0),
+               'taxa_pct': round(100 * ok.get(r, 0) / n, 1)}
+              for r, n in sorted(total.items())]
+    return pd.DataFrame(linhas)
+
+
 def montar_frames(aprovados: list[dict]) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Separa o resultado em identidade estável e cotações voláteis.
