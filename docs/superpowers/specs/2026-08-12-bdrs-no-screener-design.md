@@ -520,8 +520,9 @@ Sobe apenas com USD configurado. Habilitar Europa é acrescentar `RISK_FREE_RATE
 
 ### Beta contra o índice da região, sobre os retornos do subjacente
 
-`fetch_betas` ganha o índice como parâmetro (`^GSPC` para papel americano), e a regressão roda sobre
-os retornos do ticker do subjacente — **não** sobre os do BDR.
+`fetch_betas` **já recebe** o índice como parâmetro (`index_symbol='^BVSP'`); o que falta é
+`_fetch_fundamentals_from_api` repassá-lo em vez de aceitar o default. Com `^GSPC` para papel
+americano, a regressão roda sobre os retornos do ticker do subjacente — **não** sobre os do BDR.
 
 O retorno do BDR em reais embute a variação do câmbio. Usá-lo colocaria risco cambial dentro do
 beta, enquanto o fluxo descontado está na moeda do balanço e nunca é convertido. Seriam duas
