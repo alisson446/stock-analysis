@@ -42,6 +42,49 @@ def _env_bool(name: str, default: bool = False) -> bool:
 RISK_FREE_RATE = _env_float('RISK_FREE_RATE', 0.124)     # Título longo do governo BR (média 5a, fonte SWS)
 EQUITY_RISK_PREMIUM = _env_float('EQUITY_RISK_PREMIUM', 0.075)  # Prêmio de risco BR (S&P Global, via SWS)
 TERMINAL_GROWTH = RISK_FREE_RATE  # Perpetuidade não pode exceder a economia
+
+# Premissas macro embutidas por moeda. BRL e USD sobem configurados; qualquer
+# outra moeda exige as duas variáveis no .env, e o papel que reporta nela é
+# excluído até que existam. É de propósito: um juro chutado produz preço justo
+# com aparência de calculado.
+_MACRO_EMBUTIDO = {
+    'BRL': (RISK_FREE_RATE, EQUITY_RISK_PREMIUM),
+    'USD': (0.042, 0.045),   # Treasury longo e prêmio de risco EUA
+}
+
+
+def macro_for(moeda: str) -> dict | None:
+    """
+    Premissas de custo de capital da moeda do BALANÇO do ativo.
+
+    Descontar fluxo em dólar ao juro brasileiro embutiria inflação de reais num
+    fluxo que não a tem, e subavaliaria a empresa de forma sistemática. Por isso
+    cada moeda carrega o próprio par (juro livre de risco, prêmio de risco), e
+    o crescimento na perpetuidade acompanha o juro dela — a regra de sempre:
+    a perpetuidade não pode crescer mais que a economia.
+
+    Returns:
+        dict com `risk_free_rate`, `equity_risk_premium` e `terminal_growth`,
+        ou None quando a moeda não tem premissas definidas.
+    """
+    moeda = (moeda or '').strip().upper()
+    if not moeda:
+        return None
+
+    embutido = _MACRO_EMBUTIDO.get(moeda)
+    rf_env = os.getenv(f'RISK_FREE_RATE_{moeda}')
+    erp_env = os.getenv(f'EQUITY_RISK_PREMIUM_{moeda}')
+
+    if embutido is None and (not rf_env or not erp_env):
+        return None
+
+    base_rf, base_erp = embutido if embutido else (0.0, 0.0)
+    rf = _env_float(f'RISK_FREE_RATE_{moeda}', base_rf)
+    erp = _env_float(f'EQUITY_RISK_PREMIUM_{moeda}', base_erp)
+    return {'risk_free_rate': rf, 'equity_risk_premium': erp,
+            'terminal_growth': rf}
+
+
 # Liga o uso de estimativas forward de crescimento (analistas via yfinance) no
 # estágio 1 do DCF. Desligado por padrão -> comportamento = crescimento histórico.
 USE_FORWARD_ESTIMATES = _env_bool('USE_FORWARD_ESTIMATES', False)
@@ -131,18 +174,25 @@ def compute_sector_betas(df: pd.DataFrame) -> dict:
     return sector_betas
 
 
-def cost_of_equity(beta: float = None) -> float:
+def cost_of_equity(beta: float = None, moeda: str = 'BRL') -> float:
     """
-    Custo de capital próprio via CAPM: RF + beta × ERP.
+    Custo de capital próprio via CAPM: RF + beta × ERP, nas premissas da moeda.
 
     A versão anterior usava a Selic pura, que é a taxa LIVRE DE RISCO — descontar
     fluxos de equity a ela omite o prêmio de risco inteiro e superestima
     sistematicamente o preço justo.
+
+    Moeda sem premissas definidas devolve NaN: sem juro livre de risco não há
+    taxa de desconto, e chutar uma produziria preço justo com aparência de
+    calculado.
     """
+    macro = macro_for(moeda)
+    if macro is None:
+        return np.nan
     if beta is None or pd.isna(beta):
         beta = 1.0
     beta = max(MIN_BETA, min(MAX_BETA, float(beta)))
-    return RISK_FREE_RATE + beta * EQUITY_RISK_PREMIUM
+    return macro['risk_free_rate'] + beta * macro['equity_risk_premium']
 
 
 def compute_fcf_base(fcf_series: pd.Series) -> float:

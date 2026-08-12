@@ -716,3 +716,65 @@ class TestRsul4Regression:
         coe = v.cost_of_equity(beta=self.BETA)
         fv = v.discount_fcf_to_equity(base, growth, coe, self.TOTAL_SHARES)
         assert np.isnan(fv), f"esperado NaN (DCF inaplicável), obtido R$ {fv:.2f}"
+
+
+class TestMacroPorMoeda:
+    """
+    Descontar fluxo em dólar a 12,4% (juro brasileiro) embute inflação de reais
+    num fluxo que não a tem. Cada moeda carrega o próprio juro livre de risco e
+    prêmio de risco, e o crescimento na perpetuidade acompanha o juro dela.
+    """
+
+    def test_brl_usa_as_constantes_sem_sufixo(self):
+        m = v.macro_for('BRL')
+        assert m['risk_free_rate'] == v.RISK_FREE_RATE
+        assert m['equity_risk_premium'] == v.EQUITY_RISK_PREMIUM
+
+    def test_usd_tem_premissas_embutidas(self):
+        m = v.macro_for('USD')
+        assert m['risk_free_rate'] == pytest.approx(0.042)
+        assert m['equity_risk_premium'] == pytest.approx(0.045)
+
+    def test_terminal_growth_acompanha_o_juro_da_moeda(self):
+        for moeda in ('BRL', 'USD'):
+            m = v.macro_for(moeda)
+            assert m['terminal_growth'] == m['risk_free_rate']
+
+    def test_moeda_sem_premissas_devolve_none(self):
+        assert v.macro_for('TWD') is None
+        assert v.macro_for('') is None
+        assert v.macro_for(None) is None
+
+    def test_env_habilita_uma_moeda_nova(self, monkeypatch):
+        monkeypatch.setenv('RISK_FREE_RATE_EUR', '0.028')
+        monkeypatch.setenv('EQUITY_RISK_PREMIUM_EUR', '0.055')
+
+        m = v.macro_for('EUR')
+
+        assert m['risk_free_rate'] == pytest.approx(0.028)
+        assert m['equity_risk_premium'] == pytest.approx(0.055)
+        assert m['terminal_growth'] == pytest.approx(0.028)
+
+    def test_env_com_so_uma_das_duas_nao_habilita(self, monkeypatch):
+        monkeypatch.setenv('RISK_FREE_RATE_EUR', '0.028')
+        assert v.macro_for('EUR') is None
+
+    def test_moeda_e_normalizada(self, monkeypatch):
+        assert v.macro_for('usd') == v.macro_for('USD')
+        assert v.macro_for(' USD ') == v.macro_for('USD')
+
+
+class TestCostOfEquityPorMoeda:
+    def test_default_continua_sendo_reais(self):
+        assert v.cost_of_equity(1.0) == pytest.approx(
+            v.RISK_FREE_RATE + v.EQUITY_RISK_PREMIUM)
+
+    def test_dolar_usa_as_premissas_do_dolar(self):
+        assert v.cost_of_equity(1.0, moeda='USD') == pytest.approx(0.042 + 0.045)
+
+    def test_moeda_sem_premissas_devolve_nan(self):
+        assert pd.isna(v.cost_of_equity(1.0, moeda='TWD'))
+
+    def test_clamp_de_beta_continua_valendo(self):
+        assert v.cost_of_equity(9.0, moeda='USD') == pytest.approx(
+            0.042 + v.MAX_BETA * 0.045)
