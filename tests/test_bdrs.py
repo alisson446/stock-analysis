@@ -134,3 +134,106 @@ class TestResolverSubjacente:
     def test_sem_candidato_devolve_none(self):
         busca = _BuscaFake({'X': []})
         assert bdrs.resolver_subjacente('X', buscar=busca) is None
+
+
+def _cand(ticker, razao, preco_bdr, preco_sub, moeda_pregao='USD'):
+    return {'ticker_bdr': f'{ticker}34.SA', 'ticker': ticker, 'razao': razao,
+            'preco_bdr': preco_bdr, 'preco_subjacente': preco_sub,
+            'moeda_pregao': moeda_pregao}
+
+
+class TestRazaoEInteira:
+    """A razão do BDR é quantos BDRs equivalem a uma ação: sempre inteira."""
+
+    @pytest.mark.parametrize('razao', [20.0, 1.0, 120.0, 20.02, 19.98])
+    def test_aceita_inteiro_dentro_da_tolerancia(self, razao):
+        assert bdrs.razao_e_inteira(razao)
+
+    @pytest.mark.parametrize('razao', [0.615, 20.05, 19.9, 0.0, -20.0])
+    def test_rejeita_fora_da_tolerancia_ou_nao_positiva(self, razao):
+        assert not bdrs.razao_e_inteira(razao)
+
+    def test_rejeita_nan(self):
+        assert not bdrs.razao_e_inteira(np.nan)
+
+
+class TestCotacaoImplicita:
+    def test_e_a_cotacao_que_o_par_implica(self):
+        # 20 BDRs a R$ 78,64 equivalem a uma ação de US$ 304,76 -> R$ 5,16/US$
+        assert bdrs.cotacao_implicita(20.0, 78.64, 304.76) == pytest.approx(5.16, abs=0.01)
+
+    def test_preco_zero_ou_ausente_devolve_nan(self):
+        assert pd.isna(bdrs.cotacao_implicita(20.0, 78.64, 0))
+        assert pd.isna(bdrs.cotacao_implicita(20.0, np.nan, 304.76))
+
+
+class TestAprovarPeloPortao:
+    """
+    O portão não lê cotação nenhuma: ele compara a cotação que cada par implica
+    com a mediana do próprio universo. Um par errado implica um câmbio sem
+    sentido — FMXB34 casado com VIST deu 15% de desvio.
+    """
+
+    def _cinco_bons(self):
+        # Todos implicam ~5,16
+        return [_cand('AAPL', 20.0, 78.64, 304.76),
+                _cand('MSFT', 24.0, 108.22, 503.0),
+                _cand('GOGL', 12.0, 148.06, 344.3),
+                _cand('JPMC', 10.0, 187.07, 362.5),
+                _cand('NFLX', 50.0, 7.73, 74.9)]
+
+    def test_aprova_pares_concordantes(self):
+        aprovados, descartes = bdrs.aprovar_pelo_portao(self._cinco_bons())
+        assert len(aprovados) == 5
+        assert descartes == {}
+
+    def test_rejeita_razao_nao_inteira(self):
+        cands = self._cinco_bons() + [_cand('FMXB', 0.615, 100.0, 30.0)]
+        aprovados, descartes = bdrs.aprovar_pelo_portao(cands)
+        assert 'FMXB' not in [a['ticker'] for a in aprovados]
+        assert descartes['razao_nao_inteira'] == 1
+
+    def test_rejeita_cotacao_implicita_fora_da_tolerancia(self):
+        # razão inteira, mas implica ~5,95 contra mediana ~5,16 (15% de desvio)
+        cands = self._cinco_bons() + [_cand('FMXB', 1.0, 5.95, 1.0)]
+        aprovados, descartes = bdrs.aprovar_pelo_portao(cands)
+        assert 'FMXB' not in [a['ticker'] for a in aprovados]
+        assert descartes['cotacao_divergente'] == 1
+
+    def test_fronteira_da_tolerancia(self):
+        base = self._cinco_bons()
+        mediana = 78.64 * 20 / 304.76
+        for fator, esperado in [(1.0299, True), (1.0301, False)]:
+            cand = _cand('BORD', 1.0, mediana * fator, 1.0)
+            aprovados, _ = bdrs.aprovar_pelo_portao(base + [cand])
+            assert ('BORD' in [a['ticker'] for a in aprovados]) is esperado
+
+    def test_mediana_e_por_moeda_de_pregao(self):
+        # Um grupo em EUR com cotação bem diferente não pode deslocar o de USD.
+        usd = self._cinco_bons()
+        eur = [_cand(f'E{i}', 1.0, 6.5, 1.0, moeda_pregao='EUR') for i in range(3)]
+        aprovados, descartes = bdrs.aprovar_pelo_portao(usd + eur)
+        assert len(aprovados) == 8
+        assert descartes == {}
+
+    def test_mediana_ignora_os_reprovados_pela_razao(self):
+        # Seis pares com razão quebrada e cotação absurda não podem virar a
+        # referência do grupo.
+        bons = self._cinco_bons()
+        ruins = [_cand(f'R{i}', 0.5, 99.0, 1.0) for i in range(6)]
+        aprovados, _ = bdrs.aprovar_pelo_portao(bons + ruins)
+        assert sorted(a['ticker'] for a in aprovados) == \
+            sorted(c['ticker'] for c in bons)
+
+    def test_grupo_pequeno_demais_nao_aprova_ninguem(self):
+        dois = self._cinco_bons()[:2]
+        aprovados, descartes = bdrs.aprovar_pelo_portao(dois)
+        assert aprovados == []
+        assert descartes['moeda_com_poucos_pares'] == 2
+
+    def test_nao_le_cotacao_externa(self, monkeypatch):
+        # Trava a separação: mesmo com qualquer variável de câmbio absurda no
+        # ambiente, o conjunto aprovado é o mesmo.
+        monkeypatch.setenv('USD_BRL_RATE', '999')
+        aprovados, _ = bdrs.aprovar_pelo_portao(self._cinco_bons())
+        assert len(aprovados) == 5
