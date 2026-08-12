@@ -20,7 +20,7 @@
 - Tolerâncias do portão: razão inteira dentro de **±0,02**; cotação implícita a menos de **3%** da mediana da sua moeda de pregão; mínimo de **3 pares** por moeda para a mediana valer.
 - Premissas macro embutidas: `BRL = (0.124, 0.075)`, `USD = (0.042, 0.045)`. Qualquer outra moeda exige `RISK_FREE_RATE_<MOEDA>` **e** `EQUITY_RISK_PREMIUM_<MOEDA>` no `.env`, senão o papel é excluído.
 - `terminal_growth` de uma moeda é sempre igual ao `risk_free_rate` dela.
-- Rodar pytest via `rtk proxy` (o hook do RTK quebra a invocação direta): `rtk proxy python -m pytest ...`
+- Rodar pytest via `rtk proxy` (o hook do RTK quebra a invocação direta): `rtk proxy python3 -m pytest ...`
 
 ## Estrutura de arquivos
 
@@ -112,7 +112,7 @@ class TestPathBuilders:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `rtk proxy python -m pytest tests/test_paths.py -v`
+Run: `rtk proxy python3 -m pytest tests/test_paths.py -v`
 Expected: FAIL com `ModuleNotFoundError: No module named 'src.paths'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -162,7 +162,7 @@ def filters_file(region: str) -> Path:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `rtk proxy python -m pytest tests/test_paths.py -v`
+Run: `rtk proxy python3 -m pytest tests/test_paths.py -v`
 Expected: PASS (14 testes)
 
 - [ ] **Step 5: Commit**
@@ -237,7 +237,7 @@ class TestLiquidityMask:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `rtk proxy python -m pytest tests/test_filters.py -v`
+Run: `rtk proxy python3 -m pytest tests/test_filters.py -v`
 Expected: FAIL — `_load_config() takes 0 positional arguments` e `module 'src.filters' has no attribute '_liquidity_mask'`
 
 - [ ] **Step 3: Mover o arquivo e implementar**
@@ -348,7 +348,7 @@ def apply_bank_filters(df: pd.DataFrame, region: str = 'br') -> pd.DataFrame:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `rtk proxy python -m pytest tests/test_filters.py -v`
+Run: `rtk proxy python3 -m pytest tests/test_filters.py -v`
 Expected: PASS — os testes existentes continuam passando e os 6 novos passam
 
 - [ ] **Step 5: Commit**
@@ -420,7 +420,7 @@ class TestGetTickersPorRegiao:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `rtk proxy python -m pytest tests/test_scraper.py -v`
+Run: `rtk proxy python3 -m pytest tests/test_scraper.py -v`
 Expected: FAIL — `get_tickers() got an unexpected keyword argument 'region'`
 
 - [ ] **Step 3: Mover o arquivo e implementar**
@@ -483,7 +483,7 @@ e, no final da função, troque as três últimas linhas por:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `rtk proxy python -m pytest tests/test_scraper.py -v`
+Run: `rtk proxy python3 -m pytest tests/test_scraper.py -v`
 Expected: PASS (3 testes)
 
 - [ ] **Step 5: Commit**
@@ -551,7 +551,7 @@ class TestLeituraDoCachePorRegiao:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `rtk proxy python -m pytest tests/test_fundamentals.py -v -k Regiao`
+Run: `rtk proxy python3 -m pytest tests/test_fundamentals.py -v -k Regiao`
 Expected: FAIL — `fetch_fundamentals() got an unexpected keyword argument 'region'`
 
 - [ ] **Step 3: Mover o arquivo e implementar**
@@ -655,7 +655,7 @@ e ajuste o print final para usar `cache` em vez de `FUNDAMENTALS_CACHE`.
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `rtk proxy python -m pytest tests/test_fundamentals.py -v`
+Run: `rtk proxy python3 -m pytest tests/test_fundamentals.py -v`
 Expected: PASS — os testes existentes continuam passando e os 3 novos passam
 
 - [ ] **Step 5: Commit**
@@ -746,7 +746,7 @@ class TestCostOfEquityPorMoeda:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `rtk proxy python -m pytest tests/test_valuation.py -v -k Moeda`
+Run: `rtk proxy python3 -m pytest tests/test_valuation.py -v -k Moeda`
 Expected: FAIL — `module 'src.valuation' has no attribute 'macro_for'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -822,7 +822,7 @@ def cost_of_equity(beta: float = None, moeda: str = 'BRL') -> float:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `rtk proxy python -m pytest tests/test_valuation.py -v`
+Run: `rtk proxy python3 -m pytest tests/test_valuation.py -v`
 Expected: PASS — os testes existentes continuam passando e os 11 novos passam
 
 - [ ] **Step 5: Commit**
@@ -923,7 +923,7 @@ class TestAppendSnapshotPorRegiao:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `rtk proxy python -m pytest tests/test_valuation.py -v -k AppendSnapshotPorRegiao`
+Run: `rtk proxy python3 -m pytest tests/test_valuation.py -v -k AppendSnapshotPorRegiao`
 Expected: FAIL — `append_snapshot() got an unexpected keyword argument 'region'`
 
 - [ ] **Step 3: Mover o arquivo e implementar**
@@ -1012,7 +1012,7 @@ O restante da função (gravação com `concat`) fica como está.
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `rtk proxy python -m pytest tests/test_valuation.py -v`
+Run: `rtk proxy python3 -m pytest tests/test_valuation.py -v`
 Expected: PASS — os existentes continuam passando e os 7 novos passam
 
 - [ ] **Step 5: Commit**
@@ -1123,7 +1123,7 @@ class TestSelecionarBDRs:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `rtk proxy python -m pytest tests/test_bdrs.py -v`
+Run: `rtk proxy python3 -m pytest tests/test_bdrs.py -v`
 Expected: FAIL com `ModuleNotFoundError: No module named 'src.bdrs'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -1208,7 +1208,7 @@ def buscar_universo(region: str = 'br', mcap_min: int = 500_000_000,
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `rtk proxy python -m pytest tests/test_bdrs.py -v`
+Run: `rtk proxy python3 -m pytest tests/test_bdrs.py -v`
 Expected: PASS (18 testes)
 
 - [ ] **Step 5: Commit**
@@ -1292,7 +1292,7 @@ class TestResolverSubjacente:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `rtk proxy python -m pytest tests/test_bdrs.py -v -k Resolver`
+Run: `rtk proxy python3 -m pytest tests/test_bdrs.py -v -k Resolver`
 Expected: FAIL — `module 'src.bdrs' has no attribute 'resolver_subjacente'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -1340,7 +1340,7 @@ def resolver_subjacente(long_name: str, buscar=None) -> str | None:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `rtk proxy python -m pytest tests/test_bdrs.py -v`
+Run: `rtk proxy python3 -m pytest tests/test_bdrs.py -v`
 Expected: PASS (24 testes)
 
 - [ ] **Step 5: Commit**
@@ -1474,7 +1474,7 @@ class TestAprovarPeloPortao:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `rtk proxy python -m pytest tests/test_bdrs.py -v -k "Razao or Cotacao or Portao"`
+Run: `rtk proxy python3 -m pytest tests/test_bdrs.py -v -k "Razao or Cotacao or Portao"`
 Expected: FAIL — `module 'src.bdrs' has no attribute 'razao_e_inteira'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -1575,7 +1575,7 @@ def aprovar_pelo_portao(candidatos: list[dict]) -> tuple[list[dict], dict]:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `rtk proxy python -m pytest tests/test_bdrs.py -v`
+Run: `rtk proxy python3 -m pytest tests/test_bdrs.py -v`
 Expected: PASS (39 testes)
 
 - [ ] **Step 5: Commit**
@@ -1675,7 +1675,7 @@ class TestMontarFrames:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `rtk proxy python -m pytest tests/test_bdrs.py -v -k "Inelegibilidade or MontarFrames"`
+Run: `rtk proxy python3 -m pytest tests/test_bdrs.py -v -k "Inelegibilidade or MontarFrames"`
 Expected: FAIL — `module 'src.bdrs' has no attribute 'motivo_inelegibilidade'`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -1761,7 +1761,7 @@ def montar_frames(aprovados: list[dict]) -> tuple[pd.DataFrame, pd.DataFrame]:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `rtk proxy python -m pytest tests/ -v`
+Run: `rtk proxy python3 -m pytest tests/ -v`
 Expected: PASS — suíte inteira verde
 
 - [ ] **Step 5: Commit**
@@ -1822,7 +1822,7 @@ class TestConfigDaRegiaoUS:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `rtk proxy python -m pytest tests/test_filters.py -v -k RegiaoUS`
+Run: `rtk proxy python3 -m pytest tests/test_filters.py -v -k RegiaoUS`
 Expected: FAIL com `FileNotFoundError: filtros da região 'us' não encontrados`
 
 - [ ] **Step 3: Criar os arquivos**
@@ -1899,7 +1899,7 @@ BDR_REGION=br
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `rtk proxy python -m pytest tests/ -v`
+Run: `rtk proxy python3 -m pytest tests/ -v`
 Expected: PASS — suíte inteira verde
 
 - [ ] **Step 5: Commit**
@@ -2208,10 +2208,10 @@ class TestResumoPorRegiao:
 
 - [ ] **Step 4: Rodar a suíte e executar o notebook**
 
-Run: `rtk proxy python -m pytest tests/ -v`
+Run: `rtk proxy python3 -m pytest tests/ -v`
 Expected: PASS — suíte inteira verde
 
-Run: `rtk proxy python -m jupyter nbconvert --to notebook --execute --inplace analysis.ipynb`
+Run: `rtk proxy python3 -m jupyter nbconvert --to notebook --execute --inplace analysis.ipynb`
 Expected: execução sem exceção; a saída deve imprimir a contagem de BDRs aprovados e os descartes por motivo, e `data/us/tickers.csv`, `data/us/fundamentals.csv` e `data/us/valuation_history.csv` devem existir ao final.
 
 - [ ] **Step 5: Commit**
