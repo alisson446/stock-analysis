@@ -283,3 +283,45 @@ class TestLeituraDoCachePorRegiao:
         out = f.fetch_fundamentals([], region='us')
 
         assert list(out['moeda']) == ['EUR']
+
+
+class TestListaDeTickersVazia:
+    """
+    Nenhum par passar no portão de qualidade é resultado legítimo, não erro.
+    Antes desta guarda o frame de zero linhas saía sem coluna nenhuma e a
+    montagem do beta estourava com KeyError — derrubando a rodada depois de
+    ~1200 requisições já gastas.
+    """
+
+    def test_nao_levanta_e_devolve_frame_vazio(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(f.paths, 'DATA_ROOT', tmp_path)
+
+        out = f.fetch_fundamentals([], region='us')
+
+        assert len(out) == 0
+
+    def test_frame_vazio_tem_as_colunas_de_uma_coleta(self, tmp_path, monkeypatch):
+        # Quem consome faz merge e filtro por nome de coluna: sem elas o erro
+        # só muda de lugar.
+        monkeypatch.setattr(f.paths, 'DATA_ROOT', tmp_path)
+
+        out = f.fetch_fundamentals([], region='us')
+
+        for col in ('ticker', 'ticker_sa', 'moeda', 'preco', 'pl', 'beta_raw'):
+            assert col in out.columns
+
+    def test_respeita_incluir_liq_local(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(f.paths, 'DATA_ROOT', tmp_path)
+
+        out = f.fetch_fundamentals([], region='us', incluir_liq_local=False)
+
+        assert 'liq_media_diaria' not in out.columns
+
+    def test_nao_grava_cache_vazio(self, tmp_path, monkeypatch):
+        # Um arquivo vazio seria lido na próxima rodada como coleta já feita, e
+        # a região ficaria permanentemente sem dados.
+        monkeypatch.setattr(f.paths, 'DATA_ROOT', tmp_path)
+
+        f.fetch_fundamentals([], region='us')
+
+        assert not (tmp_path / 'us' / 'fundamentals.csv').exists()

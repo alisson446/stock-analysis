@@ -8,6 +8,21 @@ from tqdm import tqdm
 from src import paths
 
 
+# Colunas de uma linha de fundamentos. Estão aqui, e não soltas dentro da
+# coleta, porque três lugares precisam do mesmo formato: a linha boa, a linha
+# do ticker que falhou (tudo NaN) e o frame vazio de quando não há ticker
+# nenhum para coletar.
+_COLS_IDENTIDADE = ['ticker_sa', 'ticker', 'nome', 'setor', 'industria', 'moeda']
+_COLS_NUMERICAS = [
+    'preco', 'pl', 'pvp', 'margem_ebit_pct', 'margem_liquida_pct',
+    'dl_ebit', 'dl_pl', 'roe_pct', 'liquidez_corrente', 'passivos_ativos',
+    'liq_media_diaria', 'lpa', 'vpa', 'dy_pct', 'divida_liquida',
+    'ebit', 'fcf_latest', 'shares_outstanding', 'shares_total',
+    'dividend_rate', 'crescimento_receita_pct', 'crescimento_lucro_pct',
+    'lpa_estimado', 'num_analistas',
+]
+
+
 def _safe_get(info: dict, key: str, default=np.nan):
     """Retorna valor do dict ou default se None/ausente."""
     val = info.get(key)
@@ -242,6 +257,19 @@ def _fetch_fundamentals_from_api(tickers_sa: list[str], delay: float, cache: Pat
                                  index_symbol: str,
                                  incluir_liq_local: bool) -> pd.DataFrame:
     """Busca dados fundamentalistas via yfinance e salva em cache."""
+    # Lista vazia é resultado legítimo — nenhum par passou no portão de
+    # qualidade, por exemplo — e não pode derrubar a rodada. Sem esta saída o
+    # DataFrame de zero linhas sai sem coluna nenhuma, e o `beta_raw` lá
+    # embaixo estoura com KeyError depois de toda a rede já ter sido gasta.
+    # O cache NÃO é escrito: um arquivo vazio seria lido na próxima rodada
+    # como coleta já feita, e a região ficaria permanentemente sem dados.
+    if not tickers_sa:
+        cols = _COLS_IDENTIDADE + _COLS_NUMERICAS + ['beta_raw']
+        if not incluir_liq_local:
+            cols.remove('liq_media_diaria')
+        print("[fundamentals] nenhum ticker recebido, nada a coletar")
+        return pd.DataFrame(columns=cols)
+
     records = []
 
     for ticker_sa in tqdm(tickers_sa, desc="Coletando fundamentals"):
@@ -436,14 +464,7 @@ def _fetch_fundamentals_from_api(tickers_sa: list[str], delay: float, cache: Pat
                 'setor': '',
                 'industria': '',
                 'moeda': '',
-                **{k: np.nan for k in [
-                    'preco', 'pl', 'pvp', 'margem_ebit_pct', 'margem_liquida_pct',
-                    'dl_ebit', 'dl_pl', 'roe_pct', 'liquidez_corrente', 'passivos_ativos',
-                    'liq_media_diaria', 'lpa', 'vpa', 'dy_pct', 'divida_liquida',
-                    'ebit', 'fcf_latest', 'shares_outstanding', 'shares_total',
-                    'dividend_rate', 'crescimento_receita_pct',
-                    'crescimento_lucro_pct', 'lpa_estimado', 'num_analistas',
-                ]}
+                **{k: np.nan for k in _COLS_NUMERICAS}
             })
 
         time.sleep(delay)
