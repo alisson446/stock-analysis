@@ -29,7 +29,9 @@ Always import constants from `src/valuation.py`. Never redefine `SELIC` or `TERM
 ## DCF 2-Stage (Non-bank stocks)
 
 **Requirements before computing DCF:**
-- FCF base is the **median** of the historical series (not the most recent year, which anchors on the cycle peak) and must be **positive** — otherwise use DDM fallback
+- FCF base is the **trend level at the most recent year** when the series has a trajectory — at least 4 points, all positive, and R² ≥ `MIN_TREND_R2`. Otherwise it is the **median** of the historical series. The median alone anchors on the wrong year in a monotonic series: it is by construction a mid-series value, i.e. the level from two years ago. The base must be **positive** either way — otherwise use DDM fallback
+- The base is labeled in `fcf_base_source` (`trend` / `median` / empty when no base was chosen) and travels to `valuation_history.csv`, same as `growth_source`
+- Note the deliberate asymmetry: `_fcf_trend_base` may accept a line's **level** while `_compute_fcf_growth` rejects the same line's **slope**. "Where the company is today" and "does it keep this pace for 10 years" are different questions
 - `shares_outstanding` must be > 0
 
 **Stage 1 — Linear decay:**
