@@ -200,6 +200,58 @@ def cost_of_equity(beta: float = None, moeda: str = 'BRL') -> float:
     return macro['risk_free_rate'] + beta * macro['equity_risk_premium']
 
 
+def _fcf_trend_base(fcf_series: pd.Series) -> float:
+    """
+    Nível da tendência no último ano, ou NaN se a série não tem trajetória.
+
+    Responde "onde a empresa está hoje?". É pergunta diferente da que
+    `_compute_fcf_growth` faz ("ela continua nesse ritmo?"), e por isso as duas
+    podem discordar sobre a mesma reta -- ver a nota em `compute_fcf_base`.
+
+    Ajusta a mesma reta sobre o logaritmo dos FCFs e a avalia no ano mais
+    recente. Não é o último valor observado: a reta amortece um ano isolado de
+    pico, que é a preocupação que fez a base ser a mediana em primeiro lugar.
+
+    Devolve NaN em quatro situações, todas com o mesmo significado -- "não há
+    trajetória aqui, use a mediana":
+
+    - Menos de 4 pontos. Com 3, metade das séries sem tendência nenhuma passam
+      no teste de R² (é a distribuição do R² sob ruído, não uma observação
+      sobre estas ações); com 4, 29%. O yfinance entrega 4 anos, às vezes 3.
+    - Qualquer ano com FCF <= 0. Não existe logaritmo de número negativo, e uma
+      série que atravessou o prejuízo é justamente aquela em que extrapolar o
+      nível é menos confiável -- a limitação técnica coincide com a prudência.
+    - Série constante. A variação nula no log tornaria o R² uma divisão por
+      zero; a guarda explícita evita decidir por acidente de ponto flutuante.
+      (O resultado seria o mesmo: numa série constante o nível da reta é a
+      mediana.)
+    - R² abaixo de MIN_TREND_R2. A reta explica menos da metade da variação da
+      série, ou seja, o que existe ali é mais ruído do que trajetória.
+    """
+    if len(fcf_series) < 4:
+        return np.nan
+
+    # Ordenar do mais antigo ao mais recente: o yfinance entrega ao contrário.
+    values = fcf_series.values[::-1].astype(float)
+
+    if any(v <= 0 for v in values):
+        return np.nan
+
+    log_values = np.log(values)
+    years = np.arange(len(values))
+
+    if np.ptp(log_values) == 0:
+        return np.nan
+
+    slope, intercept = np.polyfit(years, log_values, 1)
+
+    r2 = float(np.corrcoef(years, log_values)[0, 1] ** 2)
+    if r2 < MIN_TREND_R2:
+        return np.nan
+
+    return float(np.exp(intercept + slope * (len(values) - 1)))
+
+
 def compute_fcf_base(fcf_series: pd.Series) -> float:
     """
     Base de FCF para o DCF: mediana da série histórica.

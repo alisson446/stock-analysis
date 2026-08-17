@@ -122,6 +122,56 @@ class TestComputeFcfGrowth:
         assert v._compute_fcf_growth(serie) == pytest.approx(0.1321, abs=1e-3)
 
 
+class TestFcfTrendBase:
+    """
+    O nível da tendência responde "onde a empresa está hoje?" -- pergunta
+    diferente de "ela continua nesse ritmo?", que é do _compute_fcf_growth.
+    Série sem trajetória devolve NaN e o chamador fica com a mediana.
+    """
+
+    # Todas as séries abaixo vêm do mais RECENTE ao mais antigo, como o
+    # yfinance entrega. Nenhuma foi copiada de data/ -- são construídas a
+    # partir da regra (Guideline 3).
+
+    def test_serie_subindo_devolve_o_nivel_da_reta(self):
+        # 100 -> 120 -> 144 -> 172,8: crescimento composto exato de 20%.
+        # A reta passa pelos quatro pontos, então o nível em t=3 é 172,8.
+        serie = pd.Series([172.8, 144.0, 120.0, 100.0])
+        assert v._fcf_trend_base(serie) == pytest.approx(172.8)
+
+    def test_serie_caindo_devolve_o_nivel_da_reta(self):
+        # A mesma série invertida: 172,8 -> 100. A tendência se aplica nas
+        # duas direções, e aqui o nível fica ABAIXO da mediana (132,0).
+        serie = pd.Series([100.0, 120.0, 144.0, 172.8])
+        assert v._fcf_trend_base(serie) == pytest.approx(100.0)
+
+    def test_serie_erratica_devolve_nan(self):
+        # 100 -> 163 -> 130 -> 160. R² = 0,4498 (medido), abaixo de
+        # MIN_TREND_R2 -- sobe e desce sem padrão, não há trajetória.
+        serie = pd.Series([160.0, 130.0, 163.0, 100.0])
+        assert np.isnan(v._fcf_trend_base(serie))
+
+    def test_menos_de_quatro_pontos_devolve_nan(self):
+        # 100 -> 120 -> 144: ajuste perfeito (R² = 1), e ainda assim recusado.
+        # Com 3 pontos, metade das séries sem tendência nenhuma passam no R².
+        serie = pd.Series([144.0, 120.0, 100.0])
+        assert np.isnan(v._fcf_trend_base(serie))
+
+    def test_ano_negativo_devolve_nan(self):
+        # Não existe log de número negativo, e uma série que atravessou o
+        # prejuízo é justamente aquela em que extrapolar o nível é menos
+        # confiável. A guarda coincide com a prudência.
+        serie = pd.Series([41.82e6, -9.786e6, 35.426e6, 21.185e6])
+        assert np.isnan(v._fcf_trend_base(serie))
+
+    def test_serie_constante_devolve_nan(self):
+        # Variação nula no log: o R² seria divisão por zero. Devolve NaN por
+        # guarda explícita, não por acidente de ponto flutuante. Aqui tanto
+        # faz para o resultado -- numa série constante o nível da reta É a
+        # mediana --, mas o caminho precisa ser uma decisão, não um acidente.
+        assert np.isnan(v._fcf_trend_base(pd.Series([100.0] * 4)))
+
+
 class TestFcfBase:
     """Base do DCF passa a ser a mediana, para não ancorar em ano de pico."""
 
