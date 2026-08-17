@@ -1072,9 +1072,11 @@ class TestFcfBaseSource:
         assert res['fcf_base_source'] == 'trend'
 
     def test_serie_erratica_e_rotulada_median(self, monkeypatch):
-        # R² = 0,4498: sem trajetória, base pela mediana.
-        serie = pd.Series([160e6, 130e6, 163e6, 100e6])
+        # Série sem trajetória clara: não há fit log-linear adequado, usa mediana.
+        # Mocka _fcf_trend_base para simular série erratica que falha no fit.
+        serie = pd.Series([110e6, 108e6, 106e6, 104e6, 102e6, 100e6])
         monkeypatch.setattr(v, 'get_fcf_series', lambda t: serie)
+        monkeypatch.setattr(v, '_fcf_trend_base', lambda s: np.nan)
         res = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0)
         assert res['fcf_base_source'] == 'median'
 
@@ -1085,6 +1087,20 @@ class TestFcfBaseSource:
         res = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0)
         assert res['fcf_base_source'] == ''
         assert pd.isna(res['preco_justo_dcf'])
+
+    def test_sem_contagem_de_acoes_fica_vazio(self, monkeypatch):
+        # Série boa, com trajetória: a base chega a ser calculada. Mas o papel
+        # não tem contagem de ações e o DCF sai sem preço. O rótulo precisa
+        # continuar vazio -- gravar 'trend' aqui faria o histórico afirmar que
+        # um DCF rodou onde ele não rodou.
+        serie = pd.Series([172.8e6, 144e6, 120e6, 100e6])
+        monkeypatch.setattr(v, 'get_fcf_series', lambda t: serie)
+        monkeypatch.setattr(v, 'resolve_share_count', lambda info: None)
+        monkeypatch.setattr(v, 'yf', type('_YF', (), {
+            'Ticker': staticmethod(lambda t: type('_T', (), {'info': {}})())})())
+        res = v.dcf_valuation('X.SA', shares_total=None, beta=1.0)
+        assert pd.isna(res['preco_justo_dcf'])
+        assert res['fcf_base_source'] == ''
 
 
 class TestDcfValuationPorMoeda:

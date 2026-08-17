@@ -506,13 +506,6 @@ def dcf_valuation(ticker_sa: str, shares_total: float = None,
         if pd.isna(fcf_base):
             return result
 
-        # Mesmo helper que compute_fcf_base consultou. O ajuste é refeito de
-        # propósito: são 4 pontos de numpy, e o custo é nulo perto de manter
-        # compute_fcf_base com assinatura estável (devolver uma tupla
-        # (base, origem) quebraria os testes e o call site sem ganho).
-        result['fcf_base_source'] = (
-            'trend' if pd.notna(_fcf_trend_base(fcf_series)) else 'median')
-
         if (shares_total is None or pd.isna(shares_total)
                 or beta is None or pd.isna(beta)):
             info = yf.Ticker(ticker_sa).info or {}
@@ -562,6 +555,12 @@ def dcf_valuation(ticker_sa: str, shares_total: float = None,
         result['fcf_base'] = fcf_base
         result['cost_of_equity'] = coe
         result['growth_source'] = growth_source
+        # Mesmo helper que compute_fcf_base consultou. O ajuste é refeito de
+        # propósito: são 4 pontos de numpy, e o custo é nulo perto de manter
+        # compute_fcf_base com assinatura estável (devolver uma tupla
+        # (base, origem) quebraria os testes e o call site sem ganho).
+        result['fcf_base_source'] = (
+            'trend' if pd.notna(_fcf_trend_base(fcf_series)) else 'median')
 
     except Exception as e:
         print(f"[valuation] DCF erro para {ticker_sa}: {e}")
