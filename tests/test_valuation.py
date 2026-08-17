@@ -1066,8 +1066,12 @@ class TestDcfValuationPorMoeda:
         return pd.Series([133.1e6, 121e6, 110e6, 100e6])
 
     def _esperado(self, discount_rate, terminal_growth):
+        # A base sai de compute_fcf_base, não de uma cópia da regra aqui: o
+        # que estes testes verificam é qual MOEDA decide o juro de desconto e
+        # a perpetuidade. Duplicar a fórmula da base fazia eles quebrarem a
+        # cada mudança nela, por um motivo que não é o deles.
         return v.discount_fcf_to_equity(
-            fcf_base=float(np.median(self._serie_crescendo().values)),
+            fcf_base=v.compute_fcf_base(self._serie_crescendo()),
             growth=0.10, discount_rate=discount_rate, shares=1e6,
             terminal_growth=terminal_growth)
 
