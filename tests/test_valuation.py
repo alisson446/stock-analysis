@@ -1071,15 +1071,32 @@ class TestFcfBaseSource:
         res = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0)
         assert res['fcf_base_source'] == 'trend'
 
-    def test_serie_erratica_e_rotulada_median(self, monkeypatch):
-        # 100 -> 163 -> 130 -> 160: sobe e desce sem padrão. R² = 0,4498,
-        # abaixo de MIN_TREND_R2, então _fcf_trend_base recusa de verdade e a
-        # base cai na mediana. Sem mock: o valor de _fcf_trend_base é
-        # exatamente o que este teste precisa exercitar.
-        serie = pd.Series([160e6, 130e6, 163e6, 100e6])
+    def test_serie_curta_e_rotulada_median(self, monkeypatch):
+        # 3 pontos: _fcf_trend_base recusa por n < 4 e a base cai na mediana,
+        # mas _compute_fcf_growth aceita (basta 2 pontos), então o DCF chega
+        # ao fim e o rótulo é gravado. É a via simples até 'median'.
+        serie = pd.Series([121e6, 110e6, 100e6])
         monkeypatch.setattr(v, 'get_fcf_series', lambda t: serie)
         res = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0)
         assert res['fcf_base_source'] == 'median'
+        assert pd.notna(res['preco_justo_dcf'])
+
+    def test_serie_erratica_so_chega_a_median_com_forward(self, monkeypatch):
+        # 100 -> 163 -> 130 -> 160, R² = 0,4498. O MESMO MIN_TREND_R2 governa
+        # duas decisões: recusa a base (certo, cai na mediana) E zera a taxa
+        # histórica. Sem uma taxa vinda de fora, o DCF sai antes de rotular e
+        # o rótulo fica '' -- não 'median'. Só o crescimento forward resgata o
+        # lado da taxa e deixa a rodada chegar ao fim.
+        serie = pd.Series([160e6, 130e6, 163e6, 100e6])
+        monkeypatch.setattr(v, 'get_fcf_series', lambda t: serie)
+        monkeypatch.setattr(v, 'USE_FORWARD_ESTIMATES', True)
+
+        sem_forward = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0)
+        assert sem_forward['fcf_base_source'] == ''
+
+        com_forward = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0,
+                                      forward_growth=0.05)
+        assert com_forward['fcf_base_source'] == 'median'
 
     def test_sem_base_escolhida_fica_vazio(self, monkeypatch):
         # Série vazia: o DCF sai antes de escolher qualquer base. String vazia
