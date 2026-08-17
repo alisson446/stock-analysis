@@ -171,6 +171,19 @@ class TestFcfTrendBase:
         # mediana --, mas o caminho precisa ser uma decisão, não um acidente.
         assert np.isnan(v._fcf_trend_base(pd.Series([100.0] * 4)))
 
+    def test_serie_com_ruido_devolve_a_reta_e_nao_o_ultimo_ponto(self):
+        # 100 -> 130 -> 170 -> 150: sobe com um recuo no fim. R² = 0,7077,
+        # acima do limiar, mas a série NÃO é geométrica exata -- e é isso que
+        # torna este teste capaz de distinguir a regressão de um atalho.
+        #
+        # Cada jeito errado de implementar devolve um número diferente daqui:
+        #   nível da reta em t=3 (correto) ... 168,59
+        #   último observado / values[0] .... 150,00
+        #   mediana ......................... 140,00
+        #   reta sem inverter a série ....... 107,99
+        serie = pd.Series([150.0, 170.0, 130.0, 100.0])
+        assert v._fcf_trend_base(serie) == pytest.approx(168.5923, abs=1e-3)
+
 
 class TestFcfBase:
     """Base do DCF passa a ser a mediana, para não ancorar em ano de pico."""
