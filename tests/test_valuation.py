@@ -659,6 +659,11 @@ class TestMetodoValuation:
         })
         out = v.apply_valuation(df, self._fundamentals('Retail'), model='stock')
         assert out.loc[0, 'metodo_valuation'] == 'ddm'
+        # A linha caiu no DDM, então não pode carregar o rótulo de base de um
+        # DCF: o histórico mostraria metodo_valuation='ddm' ao lado de
+        # fcf_base_source='median', afirmando uma base de DCF para um
+        # valuation que não foi DCF.
+        assert out.loc[0, 'fcf_base_source'] == ''
 
     def test_passes_row_forward_growth_to_dcf(self, monkeypatch):
         # O crescimento vem da LINHA (já no CSV), não de uma busca por ticker.

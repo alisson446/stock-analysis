@@ -483,7 +483,8 @@ def dcf_valuation(ticker_sa: str, shares_total: float = None,
     Returns:
         dict com 'preco_justo_dcf', 'growth_rate', 'fcf_base', 'cost_of_equity',
         'growth_source' ('forward' | 'historical'),
-        'fcf_base_source' ('trend' | 'median' | '' quando não houve base).
+        'fcf_base_source' ('trend' | 'median' | '' quando o DCF não chegou ao
+        fim -- ver o comentário no dict abaixo).
     """
     result = {
         'preco_justo_dcf': np.nan,
@@ -491,9 +492,13 @@ def dcf_valuation(ticker_sa: str, shares_total: float = None,
         'fcf_base': np.nan,
         'cost_of_equity': np.nan,
         'growth_source': 'historical',
-        # String vazia = não se chegou a escolher uma base (série vazia,
-        # mediana não-positiva, sem contagem de ações). É diferente de
-        # 'median', que significa "escolheu-se a mediana".
+        # String vazia = o DCF não chegou ao fim, então nenhuma base foi
+        # USADA. Quatro caminhos levam aqui: série de FCF vazia, mediana
+        # não-positiva, contagem de ações ausente, e nenhuma taxa de
+        # crescimento projetável. Nos dois primeiros a base nem chegou a ser
+        # calculada; nos dois últimos ela foi calculada e descartada junto com
+        # a rodada. É diferente de 'median', que significa "a base saiu da
+        # mediana e o preço justo foi calculado com ela".
         'fcf_base_source': '',
     }
 
