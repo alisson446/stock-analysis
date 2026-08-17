@@ -720,6 +720,7 @@ def apply_valuation(df: pd.DataFrame, all_fundamentals: pd.DataFrame,
     coes = []
     methods = []
     growth_sources = []
+    fcf_base_sources = []
 
     for _, row in df.iterrows():
         # Beta do SETOR, não da empresa: small caps ilíquidas medem beta
@@ -742,6 +743,7 @@ def apply_valuation(df: pd.DataFrame, all_fundamentals: pd.DataFrame,
         coes.append(coe)
 
         growth_source = ''
+        fcf_base_source = ''
 
         # --- Modelo primário ---
         if model == 'bank':
@@ -768,6 +770,7 @@ def apply_valuation(df: pd.DataFrame, all_fundamentals: pd.DataFrame,
             if pd.notna(primary_price):
                 method = 'dcf'
                 growth_source = dcf_result['growth_source']
+                fcf_base_source = dcf_result['fcf_base_source']
             else:
                 # Fallback DDM quando o DCF não é aplicável (ex.: FCF histórico
                 # negativo em incorporadoras). Rotulado explicitamente para não
@@ -780,6 +783,7 @@ def apply_valuation(df: pd.DataFrame, all_fundamentals: pd.DataFrame,
         primary_prices.append(primary_price)
         methods.append(method)
         growth_sources.append(growth_source)
+        fcf_base_sources.append(fcf_base_source)
 
         # --- Graham (secundário, igual para ambos) ---
         sector = row.get('setor', '')
@@ -799,6 +803,7 @@ def apply_valuation(df: pd.DataFrame, all_fundamentals: pd.DataFrame,
     df['preco_justo_dcf'] = primary_prices
     df['metodo_valuation'] = methods
     df['growth_source'] = growth_sources
+    df['fcf_base_source'] = fcf_base_sources
     df['preco_justo_graham'] = graham_prices
     df['cost_of_equity_pct'] = [c * 100 for c in coes]
 
@@ -839,7 +844,7 @@ def apply_valuation(df: pd.DataFrame, all_fundamentals: pd.DataFrame,
 # Colunas do resultado que são snapshotadas (as que existirem no df).
 _SNAPSHOT_RESULT_COLS = [
     'tipo', 'regiao', 'moeda', 'ticker', 'nome', 'setor', 'preco',
-    'preco_justo_dcf', 'metodo_valuation', 'growth_source',
+    'preco_justo_dcf', 'metodo_valuation', 'growth_source', 'fcf_base_source',
     'preco_justo_graham', 'margem_seg_dcf_pct', 'margem_seg_graham_pct',
     'margem_seg_media_pct', 'undervalued', 'forte_desconto',
     'cost_of_equity_pct',

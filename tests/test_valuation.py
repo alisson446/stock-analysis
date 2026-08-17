@@ -635,6 +635,7 @@ class TestMetodoValuation:
         monkeypatch.setattr(v, 'dcf_valuation', lambda *a, **k: {
             'preco_justo_dcf': 20.0, 'growth_rate': 0.1, 'fcf_base': 1.0,
             'cost_of_equity': 0.18, 'growth_source': 'historical',
+            'fcf_base_source': 'median',
         })
         df = pd.DataFrame({
             'ticker': ['X'], 'ticker_sa': ['X.SA'], 'setor': ['Retail'],
@@ -649,6 +650,7 @@ class TestMetodoValuation:
         monkeypatch.setattr(v, 'dcf_valuation', lambda *a, **k: {
             'preco_justo_dcf': np.nan, 'growth_rate': np.nan, 'fcf_base': np.nan,
             'cost_of_equity': np.nan, 'growth_source': 'historical',
+            'fcf_base_source': 'median',
         })
         df = pd.DataFrame({
             'ticker': ['INCORP'], 'ticker_sa': ['INCORP.SA'], 'setor': ['Retail'],
@@ -666,7 +668,8 @@ class TestMetodoValuation:
                      moeda='BRL'):
             captured['forward_growth'] = forward_growth
             return {'preco_justo_dcf': 20.0, 'growth_rate': 0.148, 'fcf_base': 1.0,
-                    'cost_of_equity': 0.18, 'growth_source': 'forward'}
+                    'cost_of_equity': 0.18, 'growth_source': 'forward',
+                    'fcf_base_source': 'median'}
 
         monkeypatch.setattr(v, 'dcf_valuation', fake_dcf)
         monkeypatch.setattr(v, 'FORWARD_GROWTH_DRIVER', 'revenue')
@@ -679,6 +682,31 @@ class TestMetodoValuation:
         out = v.apply_valuation(df, self._fundamentals('Retail'), model='stock')
         assert captured['forward_growth'] == pytest.approx(0.148)
         assert out.loc[0, 'growth_source'] == 'forward'
+
+    def test_stock_propaga_fcf_base_source(self, monkeypatch):
+        monkeypatch.setattr(v, 'dcf_valuation', lambda *a, **k: {
+            'preco_justo_dcf': 20.0, 'growth_rate': 0.1, 'fcf_base': 1.0,
+            'cost_of_equity': 0.18, 'growth_source': 'historical',
+            'fcf_base_source': 'trend',
+        })
+        df = pd.DataFrame({
+            'ticker': ['X'], 'ticker_sa': ['X.SA'], 'setor': ['Retail'],
+            'lpa': [2.0], 'vpa': [10.0], 'preco': [5.0],
+            'dividend_rate': [1.0], 'shares_total': [1e6],
+        })
+        out = v.apply_valuation(df, self._fundamentals('Retail'), model='stock')
+        assert out.loc[0, 'fcf_base_source'] == 'trend'
+
+    def test_banco_nao_tem_fcf_base_source(self, monkeypatch):
+        # Banco não passa por DCF; a coluna existe e fica vazia, como
+        # growth_source já faz.
+        df = pd.DataFrame({
+            'ticker': ['B'], 'ticker_sa': ['B.SA'], 'setor': ['Banks'],
+            'roe_pct': [25.0], 'vpa': [10.0], 'lpa': [2.0], 'preco': [5.0],
+            'dividend_rate': [1.0], 'shares_total': [1e6],
+        })
+        out = v.apply_valuation(df, self._fundamentals('Banks'), model='bank')
+        assert out.loc[0, 'fcf_base_source'] == ''
 
 
 class TestAppendSnapshot:
@@ -725,6 +753,17 @@ class TestAppendSnapshot:
         out = pd.read_csv(p)
         assert out.loc[0, 'crescimento_receita_pct'] == 14.8
         assert out.loc[0, 'num_analistas'] == 5
+
+    def test_snapshots_fcf_base_source(self, tmp_path):
+        # A origem da base viaja até o CSV pelo mesmo caminho que a origem do
+        # crescimento: sem ela, um salto no preço justo entre duas rodadas
+        # fica indistinguível de uma mudança de fundamento.
+        p = tmp_path / 'hist.csv'
+        df = self._valued()
+        df['fcf_base_source'] = ['trend']
+        v.append_snapshot(df, path=p, snapshot_date='2026-08-17')
+        out = pd.read_csv(p)
+        assert out.loc[0, 'fcf_base_source'] == 'trend'
 
     def test_new_columns_align_with_older_history(self, tmp_path):
         """Histórico gravado antes das colunas de crescimento não desalinha."""
@@ -1050,7 +1089,8 @@ class TestApplyValuationUsaAMoedaDaLinha:
                      moeda='BRL'):
             capturado['moeda'] = moeda
             return {'preco_justo_dcf': 20.0, 'growth_rate': 0.1, 'fcf_base': 1.0,
-                    'cost_of_equity': 0.087, 'growth_source': 'historical'}
+                    'cost_of_equity': 0.087, 'growth_source': 'historical',
+                    'fcf_base_source': 'median'}
 
         monkeypatch.setattr(v, 'dcf_valuation', fake_dcf)
         v.apply_valuation(self._linha(moeda=['USD']), self._fundamentals())
