@@ -254,15 +254,40 @@ def _fcf_trend_base(fcf_series: pd.Series) -> float:
 
 def compute_fcf_base(fcf_series: pd.Series) -> float:
     """
-    Base de FCF para o DCF: mediana da série histórica.
+    Base de FCF para o DCF: nível da tendência quando existe, mediana quando não.
 
-    Usar o ano mais recente ancora a projeção no pico do ciclo (RSUL4: 41,8M no
-    último ano vs. mediana de 28,3M). A mediana resiste tanto ao pico quanto ao
-    ano negativo isolado.
+    A mediana foi a regra única por um tempo, para não ancorar a projeção num
+    ano de pico (RSUL4: 41,8M no último ano vs. mediana de 28,3M). O argumento
+    vale para série ERRÁTICA e falha para série que sobe (ou desce) todo ano:
+    ali a mediana não resiste a pico nenhum -- ela É, por construção, um valor
+    do meio da série, ou seja, o nível de dois anos atrás.
+
+    O efeito era grande. A SEER3 (38,1 -> 67,7 -> 116,3 -> 289,0 em R$ mi) tinha
+    base 92,0 e o DCF projetava o ano 1 em 96,9 -- abaixo do que a empresa já
+    havia entregue. Como o preço justo é linear na base, a subestimação passava
+    inteira: R$ 10,98 contra R$ 31,08 partindo do nível atual.
+
+    E errava nos dois sentidos: na CMIG4, caindo todo ano, a mediana ficava
+    ACIMA do nível atual e inflava uma empresa em declínio.
+
+    Quem decide qual via vale é `_fcf_trend_base`, que devolve NaN quando a
+    série não tem trajetória. Na dúvida, sempre a mediana (Guideline 4).
+
+    Nota sobre uma aparente contradição: na SEER3 esta função aceita o nível da
+    reta (260,4M) enquanto `_compute_fcf_growth` rejeita a INCLINAÇÃO da mesma
+    reta (+93,8% ao ano, acima do projetável). Não é incoerência -- são duas
+    afirmações separáveis. "Onde a empresa está hoje" é sobre o passado
+    observado, e a reta responde bem. "Se ela mantém esse ritmo" é sobre dez
+    anos de futuro, e a reta responde mal. O contrário é que seria estranho:
+    projetar a taxa e desprezar o nível.
     """
     if fcf_series.empty:
         return np.nan
-    base = float(np.median(fcf_series.values))
+
+    base = _fcf_trend_base(fcf_series)
+    if pd.isna(base):
+        base = float(np.median(fcf_series.values))
+
     return base if base > 0 else np.nan
 
 

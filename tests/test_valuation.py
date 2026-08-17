@@ -199,6 +199,31 @@ class TestFcfBase:
     def test_returns_nan_for_empty_series(self):
         assert np.isnan(v.compute_fcf_base(pd.Series(dtype=float)))
 
+    def test_serie_com_trajetoria_usa_a_tendencia_nao_a_mediana(self):
+        # 100 -> 120 -> 144 -> 172,8. A mediana (132,0) é o nível de dois anos
+        # atrás: numa série que sobe todo ano ela não resiste a pico nenhum,
+        # ela mede o ano errado. Esperado é o nível de hoje.
+        #
+        # ESTE TESTE TRAVA A DECISÃO BIDIRECIONAL: uma variante
+        # min(mediana, tendência) devolveria 132,0 e quebraria aqui.
+        serie = pd.Series([172.8, 144.0, 120.0, 100.0])
+        assert v.compute_fcf_base(serie) == pytest.approx(172.8)
+
+    def test_trajetoria_de_queda_tambem_usa_a_tendencia(self):
+        # Mesma série invertida. O nível fica ABAIXO da mediana (132,0) -- a
+        # mediana estava inflando uma empresa em declínio.
+        serie = pd.Series([100.0, 120.0, 144.0, 172.8])
+        assert v.compute_fcf_base(serie) == pytest.approx(100.0)
+
+    def test_serie_sem_trajetoria_continua_na_mediana(self):
+        # R² = 0,4498: sem trajetória, a mediana segue valendo.
+        serie = pd.Series([160.0, 130.0, 163.0, 100.0])
+        assert v.compute_fcf_base(serie) == pytest.approx(145.0)
+
+    def test_tres_pontos_continuam_na_mediana(self):
+        serie = pd.Series([144.0, 120.0, 100.0])
+        assert v.compute_fcf_base(serie) == pytest.approx(120.0)
+
 
 class TestCostOfEquity:
     """Custo de capital próprio = RF + beta x ERP (estilo Simply Wall St)."""
