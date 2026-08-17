@@ -1072,11 +1072,12 @@ class TestFcfBaseSource:
         assert res['fcf_base_source'] == 'trend'
 
     def test_serie_erratica_e_rotulada_median(self, monkeypatch):
-        # Série sem trajetória clara: não há fit log-linear adequado, usa mediana.
-        # Mocka _fcf_trend_base para simular série erratica que falha no fit.
-        serie = pd.Series([110e6, 108e6, 106e6, 104e6, 102e6, 100e6])
+        # 100 -> 163 -> 130 -> 160: sobe e desce sem padrão. R² = 0,4498,
+        # abaixo de MIN_TREND_R2, então _fcf_trend_base recusa de verdade e a
+        # base cai na mediana. Sem mock: o valor de _fcf_trend_base é
+        # exatamente o que este teste precisa exercitar.
+        serie = pd.Series([160e6, 130e6, 163e6, 100e6])
         monkeypatch.setattr(v, 'get_fcf_series', lambda t: serie)
-        monkeypatch.setattr(v, '_fcf_trend_base', lambda s: np.nan)
         res = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0)
         assert res['fcf_base_source'] == 'median'
 
