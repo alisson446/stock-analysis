@@ -266,20 +266,39 @@ migração: `append_snapshot` já alinha colunas novas por `concat` e preenche o
 
 Novos casos em `TestFcfBase`:
 
-| caso | série (antigo → recente) | esperado |
-|---|---|---|
-| tendência limpa usa o nível da reta | crescimento composto exato de 20%, 4 pontos | valor da reta em `t=3`, não a mediana |
-| série errática mantém a mediana | R² abaixo de 0,5 | mediana |
-| 3 pontos mantêm a mediana | crescimento composto exato, 3 pontos | mediana, apesar de R² = 1 |
-| ano ≤ 0 mantém a mediana | série com um ano negativo | mediana |
-| tendência de queda também aplica | série caindo consistentemente | valor da reta, **abaixo** da mediana |
+| caso | série (antigo → recente) | mediana | esperado |
+|---|---|---|---|
+| tendência de alta usa o nível da reta | 100 → 120 → 144 → 172,8 | 132,0 | **172,8** |
+| tendência de queda usa o nível da reta | 172,8 → 144 → 120 → 100 | 132,0 | **100,0** |
+| série errática mantém a mediana | 100 → 163 → 130 → 160 (R² = 0,45) | 145,0 | 145,0 |
+| 3 pontos mantêm a mediana | 100 → 120 → 144 | 120,0 | 120,0 |
+| ano ≤ 0 mantém a mediana | série com um ano negativo | — | mediana |
 
-O último caso é o que trava a decisão bidirecional: sem ele, uma futura variante
-`min(mediana, tendência)` passaria nos testes sem que ninguém notasse.
+**O caso de alta é o que trava a decisão bidirecional.** Uma futura variante
+`min(mediana, tendência)` devolveria 132,0 onde o esperado é 172,8, e o teste quebraria. O
+caso de queda **não** trava nada — ali `min(132,0; 100,0) = 100,0`, a mesma resposta —, mas
+entra assim mesmo para provar que a tendência se aplica nas duas direções.
 
 Os três testes atuais de `TestFcfBase` **continuam passando sem alteração** — as séries deles
 contêm valor negativo e caem na mediana pelo caminho novo, exatamente como antes.
 `TestCostOfEquity::test_dcf_emits_no_price` também: a série RSUL4 tem ano negativo.
+
+### Um teste existente precisa ser ajustado
+
+`TestDcfValuationPorMoeda._esperado` calcula o preço justo esperado replicando a fórmula da
+base: `fcf_base=float(np.median(self._serie_crescendo().values))`. A série dela —
+`[133,1; 121; 110; 100]` em R$ mi, crescimento composto exato de 10% — tem 4 pontos, é toda
+positiva e ajusta com R² = 1, ou seja, passa a usar a tendência (133,1) em vez da mediana
+(115,5). Os dois testes que dependem de `_esperado` falhariam.
+
+A correção é trocar a réplica da fórmula por uma chamada a `v.compute_fcf_base(...)`. Esses
+testes verificam **qual moeda decide o juro de desconto**, não qual é a base; duplicar a
+regra da base ali foi o que os tornou frágeis a esta mudança. Delegando ao módulo, eles voltam
+a testar só o que se propõem a testar.
+
+É o único teste do conjunto atual que quebra. Varridas as 15 séries sintéticas do arquivo, as
+outras duas que mudam de base (`[292; 207; 153; 51]` e `[100; 154; 130; 160]`) só alimentam
+`_compute_fcf_growth`, que esta spec não toca.
 
 Caso novo para a origem: `dcf_valuation` devolve `fcf_base_source == 'trend'` para série com
 trajetória e `'median'` para série errática.
