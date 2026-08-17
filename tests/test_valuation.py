@@ -1057,6 +1057,36 @@ class TestApplyValuationUsaAMoedaDaLinha:
         assert capturado['moeda'] == 'USD'
 
 
+class TestFcfBaseSource:
+    """
+    A origem da base viaja junto com o preço justo, pelo mesmo motivo que
+    growth_source: sem ela, o preço justo de uma ação salta entre duas rodadas
+    do histórico sem nada no arquivo explicando por quê, e o salto fica
+    indistinguível de uma mudança de fundamento.
+    """
+
+    def test_serie_com_trajetoria_e_rotulada_trend(self, monkeypatch):
+        serie = pd.Series([172.8e6, 144e6, 120e6, 100e6])
+        monkeypatch.setattr(v, 'get_fcf_series', lambda t: serie)
+        res = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0)
+        assert res['fcf_base_source'] == 'trend'
+
+    def test_serie_erratica_e_rotulada_median(self, monkeypatch):
+        # R² = 0,4498: sem trajetória, base pela mediana.
+        serie = pd.Series([160e6, 130e6, 163e6, 100e6])
+        monkeypatch.setattr(v, 'get_fcf_series', lambda t: serie)
+        res = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0)
+        assert res['fcf_base_source'] == 'median'
+
+    def test_sem_base_escolhida_fica_vazio(self, monkeypatch):
+        # Série vazia: o DCF sai antes de escolher qualquer base. String vazia
+        # é diferente de 'median' -- aqui não houve escolha nenhuma.
+        monkeypatch.setattr(v, 'get_fcf_series', lambda t: pd.Series(dtype=float))
+        res = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0)
+        assert res['fcf_base_source'] == ''
+        assert pd.isna(res['preco_justo_dcf'])
+
+
 class TestDcfValuationPorMoeda:
     """O DCF desconta e projeta a perpetuidade na moeda do balanço."""
 

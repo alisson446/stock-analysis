@@ -482,7 +482,8 @@ def dcf_valuation(ticker_sa: str, shares_total: float = None,
 
     Returns:
         dict com 'preco_justo_dcf', 'growth_rate', 'fcf_base', 'cost_of_equity',
-        'growth_source' ('forward' | 'historical').
+        'growth_source' ('forward' | 'historical'),
+        'fcf_base_source' ('trend' | 'median' | '' quando não houve base).
     """
     result = {
         'preco_justo_dcf': np.nan,
@@ -490,6 +491,10 @@ def dcf_valuation(ticker_sa: str, shares_total: float = None,
         'fcf_base': np.nan,
         'cost_of_equity': np.nan,
         'growth_source': 'historical',
+        # String vazia = não se chegou a escolher uma base (série vazia,
+        # mediana não-positiva, sem contagem de ações). É diferente de
+        # 'median', que significa "escolheu-se a mediana".
+        'fcf_base_source': '',
     }
 
     try:
@@ -500,6 +505,13 @@ def dcf_valuation(ticker_sa: str, shares_total: float = None,
         fcf_base = compute_fcf_base(fcf_series)
         if pd.isna(fcf_base):
             return result
+
+        # Mesmo helper que compute_fcf_base consultou. O ajuste é refeito de
+        # propósito: são 4 pontos de numpy, e o custo é nulo perto de manter
+        # compute_fcf_base com assinatura estável (devolver uma tupla
+        # (base, origem) quebraria os testes e o call site sem ganho).
+        result['fcf_base_source'] = (
+            'trend' if pd.notna(_fcf_trend_base(fcf_series)) else 'median')
 
         if (shares_total is None or pd.isna(shares_total)
                 or beta is None or pd.isna(beta)):
