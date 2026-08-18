@@ -536,9 +536,23 @@ class TestForwardGrowth:
 
     O limiar de projetabilidade NÃO substitui a taxa: forward acima dele é
     descartado em favor do histórico.
+
+    Há uma segunda razão para o forward ser descartado: quando as duas fontes
+    discordam sobre a DIREÇÃO (histórico bem ajustado em queda, forward >= 0),
+    o histórico vence e o descarte fica registrado como 'historical_override'
+    -- ver _forward_contradicts_history.
     """
 
     FCF = pd.Series([121e6, 110e6, 100e6])  # CAGR histórico = 10%
+
+    # Séries sintéticas, na ordem do yfinance (mais recente primeiro).
+    # QUEDA_4 lida do mais antigo ao mais recente é 172,8 -> 144 -> 120 -> 100:
+    # cai 16,667% ao ano, R² = 1. É o formato da CMIG4, sem os números dela
+    # (Guideline 3: nada copiado do cache).
+    QUEDA_4 = pd.Series([100e6, 120e6, 144e6, 172.8e6])
+    QUEDA_3 = pd.Series([100e6, 120e6, 144e6])          # mesma queda, 3 pontos
+    ALTA_4 = pd.Series([133.1e6, 121e6, 110e6, 100e6])  # sobe 10% ao ano
+    ANO_NEGATIVO_4 = pd.Series([100e6, -20e6, 120e6, 144e6])  # sem log -> NaN
 
     def test_uses_forward_growth_when_enabled(self, monkeypatch):
         monkeypatch.setattr(v, 'get_fcf_series', lambda t: self.FCF)
@@ -593,6 +607,83 @@ class TestForwardGrowth:
         res = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0)
         assert np.isnan(res['preco_justo_dcf'])
         assert np.isnan(res['growth_rate'])
+
+    def test_historico_em_queda_derruba_forward_positivo(self, monkeypatch):
+        # O caso CMIG4. O histórico diz que o caixa encolhe, com a reta
+        # explicando quase toda a variação; o forward de RECEITA diz que
+        # cresce. São afirmações contraditórias sobre a mesma empresa, e nada
+        # na série de caixa sustenta a reversão -> projeta-se a queda.
+        monkeypatch.setattr(v, 'get_fcf_series', lambda t: self.QUEDA_4)
+        monkeypatch.setattr(v, 'USE_FORWARD_ESTIMATES', True)
+        res = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0,
+                              forward_growth=0.05)
+        assert res['growth_source'] == 'historical_override'
+        assert res['growth_rate'] == pytest.approx(-0.16667, abs=1e-5)
+
+    def test_direcoes_concordam_na_queda_mantem_forward(self, monkeypatch):
+        # Os dois dizem "encolhe". Não há discordância de DIREÇÃO para
+        # arbitrar, e comparar as MAGNITUDES seria comparar crescimento de
+        # receita com crescimento de caixa. O forward segue valendo.
+        monkeypatch.setattr(v, 'get_fcf_series', lambda t: self.QUEDA_4)
+        monkeypatch.setattr(v, 'USE_FORWARD_ESTIMATES', True)
+        res = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0,
+                              forward_growth=-0.03)
+        assert res['growth_source'] == 'forward'
+        assert res['growth_rate'] == pytest.approx(-0.03)
+
+    def test_direcoes_concordam_na_alta_mantem_forward(self, monkeypatch):
+        # Comportamento de sempre, preservado: os dois dizem "cresce".
+        monkeypatch.setattr(v, 'get_fcf_series', lambda t: self.ALTA_4)
+        monkeypatch.setattr(v, 'USE_FORWARD_ESTIMATES', True)
+        res = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0,
+                              forward_growth=0.05)
+        assert res['growth_source'] == 'forward'
+        assert res['growth_rate'] == pytest.approx(0.05)
+
+    def test_forward_negativo_com_historico_positivo_mantem_forward(self, monkeypatch):
+        # O ramo simétrico da regra: também aqui as direções discordam, e
+        # também aqui vence quem projeta queda -- só que esse já é o forward,
+        # então nenhum código novo participa. O teste existe para provar que
+        # _forward_contradicts_history não dispara com o sinal invertido.
+        monkeypatch.setattr(v, 'get_fcf_series', lambda t: self.ALTA_4)
+        monkeypatch.setattr(v, 'USE_FORWARD_ESTIMATES', True)
+        res = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0,
+                              forward_growth=-0.03)
+        assert res['growth_source'] == 'forward'
+        assert res['growth_rate'] == pytest.approx(-0.03)
+
+    def test_serie_de_tres_pontos_nao_derruba_forward(self, monkeypatch):
+        # Mesma queda de 16,667%, um ponto a menos. Com 3 pontos, metade das
+        # séries SEM tendência nenhuma passam no teste de R², então a direção
+        # medida não tem autoridade para derrubar uma estimativa de analista.
+        monkeypatch.setattr(v, 'get_fcf_series', lambda t: self.QUEDA_3)
+        monkeypatch.setattr(v, 'USE_FORWARD_ESTIMATES', True)
+        res = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0,
+                              forward_growth=0.05)
+        assert res['growth_source'] == 'forward'
+        assert res['growth_rate'] == pytest.approx(0.05)
+
+    def test_historico_inutilizavel_mantem_forward(self, monkeypatch):
+        # Série que passou pelo prejuízo: não existe log de negativo, o
+        # histórico é NaN e não há direção para comparar. É o caso da maioria
+        # dos papéis da base (10 de 15 em 2026-08-18).
+        monkeypatch.setattr(v, 'get_fcf_series', lambda t: self.ANO_NEGATIVO_4)
+        monkeypatch.setattr(v, 'USE_FORWARD_ESTIMATES', True)
+        res = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0,
+                              forward_growth=0.05)
+        assert res['growth_source'] == 'forward'
+        assert res['growth_rate'] == pytest.approx(0.05)
+
+    def test_forward_zero_e_derrubado_por_historico_em_queda(self, monkeypatch):
+        # "Estagnado" ainda contradiz "encolhendo 16,667% ao ano". O divisor
+        # da regra é o zero -- crescer contra encolher --, e zero fica do lado
+        # de quem não encolhe.
+        monkeypatch.setattr(v, 'get_fcf_series', lambda t: self.QUEDA_4)
+        monkeypatch.setattr(v, 'USE_FORWARD_ESTIMATES', True)
+        res = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0,
+                              forward_growth=0.0)
+        assert res['growth_source'] == 'historical_override'
+        assert res['growth_rate'] == pytest.approx(-0.16667, abs=1e-5)
 
 
 class TestMetodoValuation:

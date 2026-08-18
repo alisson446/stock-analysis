@@ -448,6 +448,51 @@ def resolve_forward_growth(row) -> float:
     return growth if growth > -1.0 else np.nan
 
 
+def _forward_contradicts_history(fcf_series: pd.Series, historical_growth: float,
+                                 forward_growth: float) -> bool:
+    """
+    As duas fontes de crescimento discordam sobre a DIREÇÃO?
+
+    O forward é crescimento de RECEITA (ver FORWARD_GROWTH_DRIVER) e o
+    histórico é crescimento de CAIXA LIVRE. São grandezas diferentes, então
+    comparar as magnitudes não significa nada: uma empresa pode ter receita
+    subindo 4% e caixa caindo 21% sem contradição nenhuma -- basta a margem
+    comprimir ou o capex subir. É o retrato normal de uma elétrica em ciclo de
+    investimento.
+
+    A DIREÇÃO, essa sim, significa a mesma coisa nas duas medidas. "O dinheiro
+    que sobra para o acionista está encolhendo, com a reta explicando 93% da
+    variação" e "vai crescer" são afirmações que não podem ser verdadeiras ao
+    mesmo tempo sobre a mesma empresa. Quando isso acontece, o DCF projeta a
+    queda: a taxa vem do histórico e o forward é descartado.
+
+    Não é clamp e não é teto (Guideline 2): a taxa continua saindo de uma
+    fonte real, apenas da outra. O divisor é o zero -- crescer contra
+    encolher --, que é premissa, não um limiar ajustado à amostra
+    (Guideline 3).
+
+    Exige 4 pontos. Com 3, metade das séries SEM tendência nenhuma passam no
+    teste de R² (é a distribuição do R² sob ruído, medida na spec de
+    2026-08-17); com exatamente 2, o R² é sempre 1 porque a reta passa pelos
+    dois pontos, e o critério de qualidade não filtra nada. Sem esse mínimo,
+    dois anos de queda por acaso derrubariam uma estimativa de analista.
+
+    O mínimo vale SÓ aqui. `_compute_fcf_growth` continua aceitando 2 pontos e
+    continua sendo a taxa usada quando não há forward: este mínimo não decide
+    quem recebe DCF, decide quem tem autoridade para derrubar o forward.
+
+    A ordem da série é irrelevante -- só o tamanho dela é lido.
+
+    Defeito declarado e aceito: uma queda real medida em 3 anos NÃO derruba o
+    forward, e nesse caso o preço justo fica mais alto. Contraria a Guideline
+    4 nesse caso específico. A Guideline 4 arbitra ignorância simétrica, e um
+    R² de 3 pontos não é ignorância -- é uma medida que já se sabe quebrada.
+    """
+    return (len(fcf_series) >= 4
+            and pd.notna(historical_growth) and historical_growth < 0
+            and forward_growth >= 0)
+
+
 def dcf_valuation(ticker_sa: str, shares_total: float = None,
                   beta: float = None, forward_growth: float = None,
                   moeda: str = 'BRL') -> dict:
@@ -464,6 +509,13 @@ def dcf_valuation(ticker_sa: str, shares_total: float = None,
     MAX_PROJECTABLE_GROWTH), caindo de volta no crescimento histórico caso
     contrário. Se nem uma nem outra for projetável, sai sem preço e o chamador
     recai no DDM.
+
+    Exceção: quando as duas fontes discordam sobre a DIREÇÃO -- o histórico
+    bem ajustado diz que o caixa encolhe e o forward diz que cresce -- o
+    forward é descartado e o histórico prevalece (ver
+    _forward_contradicts_history). O forward é crescimento de receita usado
+    como proxy do de caixa, e nenhuma das duas medidas sustenta a reversão que
+    a substituição afirmaria.
 
     O 'Free Cash Flow' do yfinance é OCF − CapEx, com o OCF já líquido de juros
     pagos: é FCFE. O valor presente já é o equity value, sem ajuste de dívida.
@@ -482,7 +534,10 @@ def dcf_valuation(ticker_sa: str, shares_total: float = None,
 
     Returns:
         dict com 'preco_justo_dcf', 'growth_rate', 'fcf_base', 'cost_of_equity',
-        'growth_source' ('forward' | 'historical'),
+        'growth_source' ('forward' = a estimativa de analista foi usada |
+        'historical' = não havia forward utilizável | 'historical_override' =
+        havia forward projetável, mas ele contradizia a direção do histórico e
+        foi descartado),
         'fcf_base_source' ('trend' | 'median' | '' quando o DCF não chegou ao
         fim -- ver o comentário no dict abaixo).
     """
@@ -539,8 +594,17 @@ def dcf_valuation(ticker_sa: str, shares_total: float = None,
         if (USE_FORWARD_ESTIMATES
                 and forward_growth is not None and pd.notna(forward_growth)
                 and float(forward_growth) <= MAX_PROJECTABLE_GROWTH):
-            initial_growth = float(forward_growth)
-            growth_source = 'forward'
+            if _forward_contradicts_history(fcf_series, initial_growth,
+                                            float(forward_growth)):
+                # As duas fontes discordam sobre a direção: o histórico fica
+                # como está e o forward é descartado. Rótulo próprio porque
+                # 'historical' já significa outra coisa -- "não havia forward
+                # utilizável" --, e confundir os dois faria o histórico de
+                # valuation atribuir a dado o que foi mudança de premissa.
+                growth_source = 'historical_override'
+            else:
+                initial_growth = float(forward_growth)
+                growth_source = 'forward'
 
         # Nenhuma taxa projetável (histórico acima do limiar e sem forward
         # utilizável): sai sem preço. O chamador recai no DDM e a coluna

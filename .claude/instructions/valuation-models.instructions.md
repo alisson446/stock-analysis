@@ -37,6 +37,10 @@ Always import constants from `src/valuation.py`. Never redefine `SELIC` or `TERM
 **Stage 1 — Linear decay:**
 - Growth rate decays linearly from the historical FCF trend → `TERMINAL_GROWTH` over `PROJECTION_YEARS` years
 - Year 1 uses `initial_growth`; Year `PROJECTION_YEARS` uses `TERMINAL_GROWTH`
+- The seed rate comes from the forward estimate when `USE_FORWARD_ESTIMATES` is on, it exists, and it is `<= MAX_PROJECTABLE_GROWTH`; otherwise from `_compute_fcf_growth`
+- **Direction rule** (`_forward_contradicts_history`): when the historical FCF growth is usable **and negative** and the forward is **>= 0**, the two sources disagree about direction and the historical wins — the forward is discarded. Requires at least 4 data points; with 3 points half of trendless series pass the R² gate, and with 2 the R² is always 1. The rule is one-sided in code only: the mirror case (historical positive, forward negative) already resolves to the forward, which is the declining one
+- The forward is **revenue** growth used as a proxy for **cash** growth, so only the sign is comparable across the two — never the magnitude. No threshold in percentage points; the divider is zero
+- `growth_source` records which happened: `forward` / `historical` (no usable forward) / `historical_override` (there was a projectable forward and it was discarded) / empty (the DCF never reached a rate). It travels to `valuation_history.csv`
 
 **Stage 2 — Terminal value (Gordon Growth Model):**
 ```
