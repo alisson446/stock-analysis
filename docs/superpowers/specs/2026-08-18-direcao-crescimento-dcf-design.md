@@ -348,8 +348,20 @@ crescimento histórico utilizável, e ele é raro:
 | R² abaixo de `MIN_TREND_R2` (RIAA3 0,064; BLAU3 0,083) | 2 |
 | **utilizável** (CMIG4) | **1** |
 
-Ou seja: em 14 dos 15 papéis o forward continua rodando **sem contraprova nenhuma**. Isso é
+Ou seja: em **6** dos 15 papéis o forward continua rodando **sem contraprova nenhuma**. Isso é
 escopo, não descuido — ver "Fora de escopo" abaixo.
+
+Os **8 restantes** não chegam nem lá: a mediana do FCF deles é negativa (são incorporadoras e
+construtoras — CYRE3 −729,7; EVEN3 −255,9; JHSF3 −166,7; EZTC3 −136,3; LAVV3 −119,8;
+MDNE3 −81,7; MELK3 −73,4; TRIS3 −6,5 R$ mi), então `compute_fcf_base` devolve `NaN` e
+`dcf_valuation` sai **antes** do bloco de crescimento. Eles não têm DCF nenhum e caem no DDM,
+com `metodo_valuation = 'ddm'` e `growth_source` vazio. A regra desta spec nem é alcançada
+por eles.
+
+Isso foi medido na verificação de ponta a ponta, depois da implementação: a redação anterior
+desta seção dizia "14 sem contraprova", tratando como equivalentes o papel que roda o forward
+sem cross-check e o papel que não roda DCF nenhum. São coisas diferentes, e a diferença muda o
+tamanho do item adiado logo abaixo — de 14 papéis para 6.
 
 **A SEER3 mantém o DCF.** Era o risco principal do desenho: o histórico dela é +93,8% ao ano,
 acima do limiar de projetabilidade, logo `NaN`. Sem histórico utilizável não há discordância
@@ -379,7 +391,7 @@ simplificar a regra.
 
 ## Fora de escopo
 
-**Os 14 papéis em que o forward roda sem contraprova.** Onde `_compute_fcf_growth` devolve
+**Os 6 papéis em que o forward roda sem contraprova.** Onde `_compute_fcf_growth` devolve
 `NaN` não há discordância para arbitrar, e dar uma contraprova a eles exigiria um sinal de
 direção que funcione sem logaritmo — reta em nível, sinal do último ano, média dos dois
 últimos —, cada um com premissa própria a defender. Além disso, a spec de ontem já argumentou
