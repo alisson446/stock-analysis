@@ -537,7 +537,9 @@ def dcf_valuation(ticker_sa: str, shares_total: float = None,
         'growth_source' ('forward' = a estimativa de analista foi usada |
         'historical' = não havia forward utilizável | 'historical_override' =
         havia forward projetável, mas ele contradizia a direção do histórico e
-        foi descartado),
+        foi descartado | '' quando o DCF não chegou ao fim -- mesmos quatro
+        caminhos e mesmo motivo do comentário em 'fcf_base_source' logo
+        abaixo),
         'fcf_base_source' ('trend' | 'median' | '' quando o DCF não chegou ao
         fim -- ver o comentário no dict abaixo).
     """
@@ -546,7 +548,9 @@ def dcf_valuation(ticker_sa: str, shares_total: float = None,
         'growth_rate': np.nan,
         'fcf_base': np.nan,
         'cost_of_equity': np.nan,
-        'growth_source': 'historical',
+        # String vazia pelo mesmo motivo de 'fcf_base_source' logo abaixo:
+        # nenhuma taxa foi escolhida nos quatro caminhos de saída antecipada.
+        'growth_source': '',
         # String vazia = o DCF não chegou ao fim, então nenhuma base foi
         # USADA. Quatro caminhos levam aqui: série de FCF vazia, mediana
         # não-positiva, contagem de ações ausente, e nenhuma taxa de

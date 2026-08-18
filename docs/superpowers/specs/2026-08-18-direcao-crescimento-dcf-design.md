@@ -190,6 +190,15 @@ ruído puro passa em metade das vezes. Invocar a Guideline 4 ali seria deixar ru
 preço justo, com o sinal escolhido a dedo — o mesmo raciocínio que a spec de ontem usou para
 rejeitar `min(mediana, tendência)`.
 
+**Nota de honestidade sobre este argumento.** "Ignorância simétrica" é uma leitura da
+Guideline 4, não o texto dela. O texto integral da Guideline 4 é: *"Quando uma escolha de
+modelagem admitir erro nos dois sentidos, prefira a que produz preço justo menor"* — sem
+qualificador sobre a robustez da medida que está sendo comparada. Este argumento acrescenta um
+qualificador que não está escrito, e a mesma leitura já foi usada na spec de 2026-08-17.
+Resolver essa tensão — emendar a §4 por escrito para incluir o qualificador, ou registrar
+formalmente que ela está sendo conscientemente estreitada nesses casos — é uma pendência em
+aberto para o autor do repositório, não uma decisão desta spec.
+
 ### 3. Terceiro valor em `growth_source`: `'historical_override'`
 
 `growth_source` passa a ter três valores possíveis quando o DCF chega ao fim:
@@ -281,7 +290,10 @@ valor novo é apenas mais uma string dela.
   execução). A edição fica combinada com o autor no momento da implementação, fora deste
   commit.
 
-`docs/GUIDELINES.md` não muda: esta spec aplica os princípios existentes, não os revisa.
+`docs/GUIDELINES.md` não muda por esta spec: nenhuma edição ao arquivo está incluída aqui. Isso
+não fecha a tensão registrada na decisão 2 sobre a leitura de "ignorância simétrica" na
+Guideline 4 — só marca que resolvê-la, emendando o texto ou registrando o estreitamento por
+escrito, é decisão do autor do repositório, fora do escopo desta spec.
 
 ## Testes
 
@@ -348,15 +360,23 @@ crescimento histórico utilizável, e ele é raro:
 | R² abaixo de `MIN_TREND_R2` (RIAA3 0,064; BLAU3 0,083) | 2 |
 | **utilizável** (CMIG4) | **1** |
 
-Ou seja: em **6** dos 15 papéis o forward continua rodando **sem contraprova nenhuma**. Isso é
-escopo, não descuido — ver "Fora de escopo" abaixo.
+Os **8 restantes**, contidos na linha de 10 da tabela acima, não chegam nem a essa conta: a
+mediana do FCF deles é negativa (são incorporadoras e construtoras — CYRE3 −729,7; EVEN3
+−255,9; JHSF3 −166,7; EZTC3 −136,3; LAVV3 −119,8; MDNE3 −81,7; MELK3 −73,4; TRIS3 −6,5 R$ mi),
+então `compute_fcf_base` devolve `NaN` e `dcf_valuation` sai **antes** do bloco de crescimento
+— isso é medido diretamente (o script chama `dcf_valuation` e observa `preco_justo_dcf` como
+`NaN` para os 8). O passo seguinte — que eles caem no DDM, com `metodo_valuation = 'ddm'` e
+`growth_source` vazio — **não** é medido pelo mesmo script: aquele script chama `dcf_valuation`
+direto e nunca passa por `apply_valuation`, que é onde mora o fallback do DDM. É **inferido**
+por inspeção do código e do cache: os 8 têm `dividend_rate` positivo em
+`data/br/fundamentals.csv`, e `cost_of_equity > terminal_growth` para qualquer beta positivo —
+as duas condições de que o DDM precisa para produzir preço.
 
-Os **8 restantes** não chegam nem lá: a mediana do FCF deles é negativa (são incorporadoras e
-construtoras — CYRE3 −729,7; EVEN3 −255,9; JHSF3 −166,7; EZTC3 −136,3; LAVV3 −119,8;
-MDNE3 −81,7; MELK3 −73,4; TRIS3 −6,5 R$ mi), então `compute_fcf_base` devolve `NaN` e
-`dcf_valuation` sai **antes** do bloco de crescimento. Eles não têm DCF nenhum e caem no DDM,
-com `metodo_valuation = 'ddm'` e `growth_source` vazio. A regra desta spec nem é alcançada
-por eles.
+Desses 14, em **6** o forward continua rodando **sem contraprova nenhuma** — chegam ao fim do
+DCF (a tabela acima) sem que nenhuma direção histórica esteja disponível para compará-los. Os
+outros **8**, como acabou de ser descrito, nem chegam a essa disputa: caem no DDM antes de
+qualquer crescimento ser calculado. Em ambos os casos a regra desta spec não é alcançada. Isso
+é escopo, não descuido — ver "Fora de escopo" abaixo.
 
 Isso foi medido na verificação de ponta a ponta, depois da implementação: a redação anterior
 desta seção dizia "14 sem contraprova", tratando como equivalentes o papel que roda o forward
@@ -390,6 +410,28 @@ positiva e bem ajustada passa a ser candidato. O alcance pequeno de hoje não é
 simplificar a regra.
 
 ## Fora de escopo
+
+**A faca de ponta em `forward = 0`.** A regra da decisão 1 é uma função degrau no SINAL do
+forward. Um forward de **−0,01%** e um de **+4,26%** carregam, para qualquer leitura honesta,
+o mesmo conteúdo direcional de "receita não encolhe" — mas os dois produzem resultados opostos
+na CMIG4 (histórico em queda de −21,07% ao ano, R² = 0,93): o −0,01% não aciona o override
+(`forward_growth >= 0` é falso) e é usado como está, semeando o estágio 1 em praticamente 0%; o
++4,26% aciona o override e é descartado por inteiro, cedendo lugar aos −21,07% do histórico. A
+proteção que esta spec constrói é contornável por uma troca de sinal na terceira casa decimal
+de uma estimativa de analista — e o lado que "escapa" da proteção é justamente o que produz o
+preço justo mais generoso, o oposto do que a regra pretende evitar.
+
+Fechar esse buraco exigiria uma premissa que esta spec não tem: uma faixa de magnitude em
+torno de zero (por exemplo, "forward entre −X% e +X% conta como estagnação, não como direção")
+ou algum critério de robustez sobre a própria estimativa forward. Escrever essa faixa esbarra
+no mesmo problema já levantado na decisão 1 — receita e caixa são grandezas incomensuráveis —,
+e qualquer limiar escolhido sem uma base de dado para ele seria exatamente o número "a dedo"
+que a Guideline 3 proíbe. É a mesma **classe** de defeito que a decisão 2 já declara com
+cuidado para o caso de 3 anos — uma aresta em que o modelo prefere silenciosamente o preço
+justo mais alto —, e é o único que ficou sem registrar aqui. Fica para spec própria, que
+precisará resolver a incomensurabilidade antes de propor qualquer faixa. A correção da CMIG4
+**não** é cobertura geral deste problema: ela resolve o caso em que o forward já está
+claramente do lado "cresce" (+4,26%), não o caso em que ele está perto de zero.
 
 **Os 6 papéis em que o forward roda sem contraprova.** Onde `_compute_fcf_growth` devolve
 `NaN` não há discordância para arbitrar, e dar uma contraprova a eles exigiria um sinal de

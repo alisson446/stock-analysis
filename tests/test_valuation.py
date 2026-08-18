@@ -618,6 +618,27 @@ class TestForwardGrowth:
         res = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0,
                               forward_growth=0.05)
         assert res['growth_source'] == 'historical_override'
+        # Os dois portões de 4 pontos (_forward_contradicts_history e
+        # _fcf_trend_base) concordam nesta série: precisam concordar sempre
+        # que a sobreposição dispara, porque as condições da tendência
+        # (n>=4, positivos, R² >= MIN_TREND_R2) são as mesmas que habilitam
+        # a comparação de direção.
+        assert res['fcf_base_source'] == 'trend'
+        assert res['growth_rate'] == pytest.approx(-0.16667, abs=1e-5)
+
+    def test_forward_nao_projetavel_com_historico_em_queda_nao_vira_override(self, monkeypatch):
+        # Trava a ORDEM das duas checagens. O forward aqui é rejeitado por não
+        # ser projetável (14,107 >> MAX_PROJECTABLE_GROWTH), então
+        # _forward_contradicts_history nunca chega a rodar -- 'historical' é
+        # "não havia forward utilizável", não "um forward projetável foi
+        # derrubado". Se a ordem das checagens for invertida, este teste
+        # passa a falhar mostrando 'historical_override' aqui, onde não havia
+        # forward projetável nenhum para derrubar.
+        monkeypatch.setattr(v, 'get_fcf_series', lambda t: self.QUEDA_4)
+        monkeypatch.setattr(v, 'USE_FORWARD_ESTIMATES', True)
+        res = v.dcf_valuation('X.SA', shares_total=1e6, beta=1.0,
+                              forward_growth=14.107)
+        assert res['growth_source'] == 'historical'
         assert res['growth_rate'] == pytest.approx(-0.16667, abs=1e-5)
 
     def test_direcoes_concordam_na_queda_mantem_forward(self, monkeypatch):
