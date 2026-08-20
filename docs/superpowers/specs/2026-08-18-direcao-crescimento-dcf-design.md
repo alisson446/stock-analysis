@@ -199,6 +199,14 @@ Resolver essa tensão — emendar a §4 por escrito para incluir o qualificador,
 formalmente que ela está sendo conscientemente estreitada nesses casos — é uma pendência em
 aberto para o autor do repositório, não uma decisão desta spec.
 
+**Pendência resolvida em 2026-08-18.** O autor optou por emendar a §4. A Guideline 4 agora
+traz uma subseção — *"O que 'admitir erro nos dois sentidos' quer dizer"* — que diz
+explicitamente que ela arbitra entre candidatos defensáveis, que candidatos sabidamente
+imprestáveis são eliminados antes pelos méritos deles, e que a razão da eliminação tem de
+valer igual se o candidato eliminado fosse o número maior. O argumento acima passa a citar
+texto que existe. Esta spec fica como está de propósito: reescrevê-la apagaria o registro de
+que a leitura veio antes da regra.
+
 ### 3. Terceiro valor em `growth_source`: `'historical_override'`
 
 `growth_source` passa a ter três valores possíveis quando o DCF chega ao fim:

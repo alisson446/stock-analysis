@@ -57,6 +57,25 @@ Preço justo baixo demais faz a ação sumir da lista: você perde uma oportunid
 justo alto demais faz uma empresa ruim aparecer como barata: você compra. Num screener de
 valor esses erros não têm o mesmo custo.
 
+### O que "admitir erro nos dois sentidos" quer dizer
+
+Este princípio arbitra entre candidatos que são, cada um por si, **defensáveis** — situações
+em que genuinamente não se sabe qual está certo. Ele não é um critério para escolher o menor
+número disponível.
+
+Antes de aplicá-lo, elimine pelos méritos deles os candidatos que já se sabe que não servem:
+o que mede demonstravelmente a coisa errada, o que se apoia numa medida sabidamente quebrada,
+o que nem chega a ser uma afirmação sobre a empresa. A Guideline 4 arbitra o que sobrar.
+Aplicá-la antes dessa eliminação preserva um número sabidamente errado só porque ele é o
+menor — e isso não é conservadorismo, é ruído com o sinal escolhido a dedo.
+
+**A trava contra o uso oportunista.** A razão para eliminar um candidato tem que valer igual
+se ele fosse o número **maior**. Se o argumento "essa medida não é confiável" só aparece
+quando ela puxa o preço para baixo, ele não é um argumento, é uma preferência.
+
+*Escrito em 2026-08-18, depois de duas specs (2026-08-17 e 2026-08-18) terem apoiado decisões
+numa leitura da §4 que ainda não estava no texto dela.*
+
 ## 5. Documentar em linguagem acessível
 
 Docstrings, comentários e specs não devem pressupor formação em finanças. Conceitos como
